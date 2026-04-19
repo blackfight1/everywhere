@@ -1,0 +1,982 @@
+  ---                                                                                                                                
+  Hidden Attack Surface Scanner — 完整设计文档（Go + Interactsh + Docker）                                                           
+                                                                                                                                     
+  ---                                                                                                                                
+  一、项目目标                                                                                                                       
+                                                                                                                                     
+  构建一个 Go 语言编写的独立 Web 应用，自动化实现 Burp Suite 插件 "Collaborator Everywhere v2" 的全部功能，使用                      
+  projectdiscovery/interactsh 作为 OOB 回调基础设施（支持自建或使用公共服务器），并深度结合 James Kettle "Cracking the Lens"         
+  研究中的高级攻击技术进行增强。无需 Burp Suite。使用 Docker Compose 一键部署。                                                      
+                                                                                                                                     
+  ---                                                                                                                                
+  二、技术栈                                                                                                                         
+                                                                                                                                     
+  ┌─────────────┬─────────────────────────────────────────────────────┐                                                              
+  │    组件     │                        技术                         │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ 语言        │ Go 1.22+                                            │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ OOB 回调    │ github.com/projectdiscovery/interactsh Go client 库 │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ HTTP 客户端 │ 标准 net/http + 畸形请求用 raw net.Conn             │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ Web 框架    │ Gin                                                 │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ 前端        │ Vue 3 + Vite，独立 Nginx 容器提供服务               │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ 实时推送    │ WebSocket（gorilla/websocket）                      │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ 数据库      │ PostgreSQL 16 容器                                  │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ ORM         │ GORM + gorm.io/driver/postgres                      │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ 容器化      │ Docker + Docker Compose                             │                                                              
+  ├─────────────┼─────────────────────────────────────────────────────┤                                                              
+  │ 配置        │ YAML 配置文件 + 环境变量覆盖                        │                                                              
+  └─────────────┴─────────────────────────────────────────────────────┘                                                              
+                                                                                                                                     
+  ---                                                                                                                                
+  三、系统架构                                                                                                                       
+                                                                                                                                     
+  ┌─────── Docker Compose ──────────────────────────────┐                                                                            
+  │                                                     │                                                                            
+  │  ┌────────────┐   ┌──────────────┐   ┌───────────┐  │                                                                            
+  │  │  frontend   │   │   backend    │   │ postgres  │  │                                                                           
+  │  │  (Nginx)    │   │   (Go)       │   │  :5432    │  │                                                                           
+  │  │  :80        │──▶│   :8080      │──▶│           │  │                                                                           
+  │  │             │   │              │   │           │  │                                                                           
+  │  └────────────┘   └──────┬───────┘   └───────────┘  │                                                                            
+  │                          │                          │                                                                            
+  └──────────────────────────┼──────────────────────────┘                                                                            
+                             │ HTTPS polling                                                                                         
+                             ▼                                                                                                       
+                    ┌─────────────────┐                                                                                              
+                    │  Interactsh     │                                                                                              
+                    │  Server         │                                                                                              
+                    │  (自建或公共)    │                                                                                             
+                    └─────────────────┘                                                                                              
+                                                                                                                                     
+  Backend 内部结构：                                                                                                                 
+                                                                                                                                     
+  ┌──────────────────────────────────────────────┐                                                                                   
+  │              Go Backend                       │                                                                                  
+  │                                              │                                                                                   
+  │  ┌─────────┐  ┌──────────┐  ┌─────────────┐  │                                                                                   
+  │  │ REST API │  │ WS Hub   │  │ 扫描引擎     │  │                                                                                 
+  │  │ (Gin)    │  │ (实时推送)│  │ (goroutine  │  │                                                                                 
+  │  │          │  │          │  │  pool)       │  │                                                                                 
+  │  └────┬─────┘  └────┬─────┘  └──────┬──────┘  │                                                                                  
+  │       │             │               │         │                                                                                  
+  │  ┌────▼─────────────▼───────────────▼──────┐  │                                                                                  
+  │  │          关联引擎 (Correlator)            │  │                                                                                
+  │  │   UniqueID → 原始请求 → Pingback 生成     │  │                                                                                
+  │  └──────────────────┬──────────────────────┘  │                                                                                  
+  │                     │                         │                                                                                  
+  │  ┌──────────────────▼──────────────────────┐  │                                                                                  
+  │  │      Interactsh Client (Go lib)          │  │                                                                                 
+  │  │  client.URL() | client.StartPolling()    │  │                                                                                 
+  │  └──────────────────────────────────────────┘  │                                                                                 
+  └──────────────────────────────────────────────┘                                                                                   
+                                                                                                                                     
+  ---                                                                                                                                
+  四、Docker 部署设计                                                                                                                
+                                                                                                                                     
+  4.1 docker-compose.yml                                                                                                             
+                                                                                                                                     
+  version: "3.9"                                                                                                                     
+                                                                                                                                     
+  services:                                                                                                                          
+    postgres:                                                                                                                        
+      image: postgres:16-alpine                                                                                                      
+      container_name: hass-db                                                                                                        
+      restart: unless-stopped                                                                                                        
+      environment:                                                                                                                   
+        POSTGRES_DB: hass                                                                                                            
+        POSTGRES_USER: hass                                                                                                          
+        POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}                                                                                  
+      volumes:                                                                                                                       
+        - pg_data:/var/lib/postgresql/data                                                                                           
+      ports:                                                                                                                         
+        - "127.0.0.1:5432:5432"                                                                                                      
+      healthcheck:                                                                                                                   
+        test: ["CMD-SHELL", "pg_isready -U hass"]                                                                                    
+        interval: 5s                                                                                                                 
+        timeout: 3s                                                                                                                  
+        retries: 10                                                                                                                  
+                                                                                                                                     
+    backend:                                                                                                                         
+      build:                                                                                                                         
+        context: .                                                                                                                   
+        dockerfile: Dockerfile.backend                                                                                               
+      container_name: hass-backend                                                                                                   
+      restart: unless-stopped                                                                                                        
+      depends_on:                                                                                                                    
+        postgres:                                                                                                                    
+          condition: service_healthy                                                                                                 
+      environment:                                                                                                                   
+        DB_HOST: postgres                                                                                                            
+        DB_PORT: 5432                                                                                                                
+        DB_NAME: hass                                                                                                                
+        DB_USER: hass                                                                                                                
+        DB_PASSWORD: ${DB_PASSWORD:-changeme}                                                                                        
+        INTERACTSH_SERVER: ${INTERACTSH_SERVER:-}                                                                                    
+        INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:-}                                                                                      
+      ports:                                                                                                                         
+        - "127.0.0.1:8080:8080"                                                                                                      
+      volumes:                                                                                                                       
+        - ./configs:/app/configs                                                                                                     
+                                                                                                                                     
+    frontend:                                                                                                                        
+      build:                                                                                                                         
+        context: ./frontend                                                                                                          
+        dockerfile: Dockerfile                                                                                                       
+      container_name: hass-frontend                                                                                                  
+      restart: unless-stopped                                                                                                        
+      depends_on:                                                                                                                    
+        - backend                                                                                                                    
+      ports:                                                                                                                         
+        - "80:80"                                                                                                                    
+      environment:                                                                                                                   
+        BACKEND_URL: http://backend:8080                                                                                             
+                                                                                                                                     
+    # 可选：自建 interactsh server                                                                                                   
+    # interactsh:                                                                                                                    
+    #   image: projectdiscovery/interactsh-server:latest                                                                             
+    #   container_name: hass-interactsh                                                                                              
+    #   restart: unless-stopped                                                                                                      
+    #   command: ["-d", "oob.yourdomain.com", "-ip", "0.0.0.0", "-token", "${INTERACTSH_TOKEN}"]                                     
+    #   ports:                                                                                                                       
+    #     - "53:53/udp"                                                                                                              
+    #     - "443:443"                                                                                                                
+    #     - "80:80"  # 注意与 frontend 端口冲突时需要调整                                                                            
+                                                                                                                                     
+  volumes:                                                                                                                           
+    pg_data:                                                                                                                         
+                                                                                                                                     
+  4.2 .env 文件                                                                                                                      
+                                                                                                                                     
+  DB_PASSWORD=your_secure_password                                                                                                   
+  INTERACTSH_SERVER=oob.yourdomain.com                                                                                               
+  INTERACTSH_TOKEN=your_token                                                                                                        
+                                                                                                                                     
+  4.3 Dockerfile.backend                                                                                                             
+                                                                                                                                     
+  FROM golang:1.22-alpine AS builder                                                                                                 
+  WORKDIR /build                                                                                                                     
+  COPY go.mod go.sum ./                                                                                                              
+  RUN go mod download                                                                                                                
+  COPY . .                                                                                                                           
+  RUN CGO_ENABLED=0 go build -o /scanner ./cmd/server/                                                                               
+                                                                                                                                     
+  FROM alpine:3.19                                                                                                                   
+  RUN apk add --no-cache ca-certificates                                                                                             
+  COPY --from=builder /scanner /usr/local/bin/scanner                                                                                
+  COPY configs/ /app/configs/                                                                                                        
+  WORKDIR /app                                                                                                                       
+  ENTRYPOINT ["scanner"]                                                                                                             
+                                                                                                                                     
+  4.4 frontend/Dockerfile                                                                                                            
+                                                                                                                                     
+  FROM node:20-alpine AS builder                                                                                                     
+  WORKDIR /app                                                                                                                       
+  COPY package*.json ./                                                                                                              
+  RUN npm ci                                                                                                                         
+  COPY . .                                                                                                                           
+  RUN npm run build                                                                                                                  
+                                                                                                                                     
+  FROM nginx:alpine                                                                                                                  
+  COPY --from=builder /app/dist /usr/share/nginx/html                                                                                
+  COPY nginx.conf /etc/nginx/conf.d/default.conf                                                                                     
+                                                                                                                                     
+  4.5 frontend/nginx.conf                                                                                                            
+                                                                                                                                     
+  server {                                                                                                                           
+      listen 80;                                                                                                                     
+      root /usr/share/nginx/html;                                                                                                    
+      index index.html;                                                                                                              
+                                                                                                                                     
+      # 前端路由 — SPA history mode                                                                                                  
+      location / {                                                                                                                   
+          try_files $uri $uri/ /index.html;                                                                                          
+      }                                                                                                                              
+                                                                                                                                     
+      # API 反向代理                                                                                                                 
+      location /api/ {                                                                                                               
+          proxy_pass http://backend:8080;                                                                                            
+          proxy_set_header Host $host;                                                                                               
+          proxy_set_header X-Real-IP $remote_addr;                                                                                   
+      }                                                                                                                              
+                                                                                                                                     
+      # WebSocket 反向代理                                                                                                           
+      location /api/ws {                                                                                                             
+          proxy_pass http://backend:8080;                                                                                            
+          proxy_http_version 1.1;                                                                                                    
+          proxy_set_header Upgrade $http_upgrade;                                                                                    
+          proxy_set_header Connection "upgrade";                                                                                     
+          proxy_read_timeout 86400;                                                                                                  
+      }                                                                                                                              
+  }                                                                                                                                  
+                                                                                                                                     
+  ---                                                                                                                                
+  五、核心模块详细设计                                                                                                               
+                                                                                                                                     
+  模块 1：Interactsh 集成层（pkg/oob/）                                                                                              
+                                                                                                                                     
+  直接使用 interactsh Go client 库，无需自建 DNS/HTTP 服务。                                                                         
+                                                                                                                                     
+  // pkg/oob/client.go                                                                                                               
+                                                                                                                                     
+  type OOBClient struct {                                                                                                            
+      client       *interactsh_client.Client                                                                                         
+      correlations sync.Map  // uniqueID → *CorrelationEntry                                                                         
+      ownIPs       sync.Map  // string → bool，扫描器自身出口 IP                                                                     
+  }                                                                                                                                  
+                                                                                                                                     
+  type CorrelationEntry struct {                                                                                                     
+      ScanTaskID  string                                                                                                             
+      TargetURL   string                                                                                                             
+      PayloadType string    // "header" / "param" / "raw"                                                                            
+      PayloadKey  string                                                                                                             
+      PayloadVal  string                                                                                                             
+      SentAt      time.Time                                                                                                          
+      FullOOBURL  string                                                                                                             
+  }                                                                                                                                  
+                                                                                                                                     
+  // 创建客户端                                                                                                                      
+  func NewOOBClient(serverURL string, token string) (*OOBClient, error) {                                                            
+      opts := &interactsh_client.Options{                                                                                            
+          ServerURL: serverURL,  // 自建: "oob.yourdomain.com"                                                                       
+                                 // 公共: "" 空值使用默认 "oast.pro,oast.live,oast.site,..."                                         
+          Token:     token,                                                                                                          
+      }                                                                                                                              
+      client, err := interactsh_client.New(opts)                                                                                     
+      // ...                                                                                                                         
+  }                                                                                                                                  
+                                                                                                                                     
+  // 生成唯一 OOB URL 并注册关联                                                                                                     
+  func (o *OOBClient) GeneratePayload(entry CorrelationEntry) string {                                                               
+      url := o.client.URL()  // 返回 "ck3r5si1234abcde.oast.pro"                                                                     
+      uniqueID := strings.Split(url, ".")[0]                                                                                         
+      o.correlations.Store(uniqueID, &entry)                                                                                         
+      return url                                                                                                                     
+  }                                                                                                                                  
+                                                                                                                                     
+  // 启动轮询                                                                                                                        
+  func (o *OOBClient) StartPolling(callback func(*Pingback)) {                                                                       
+      o.client.StartPolling(5*time.Second, func(interaction *server.Interaction) {                                                   
+          entry, ok := o.correlations.Load(interaction.UniqueID)                                                                     
+          if !ok {                                                                                                                   
+              // 检查是否为自身 IP 检测的回调                                                                                        
+              o.checkSelfIP(interaction)                                                                                             
+              return                                                                                                                 
+          }                                                                                                                          
+          cor := entry.(*CorrelationEntry)                                                                                           
+          fromOwnIP := o.isSelfIP(interaction.RemoteAddress)                                                                         
+          pingback := &Pingback{                                                                                                     
+              Interaction: interaction,                                                                                              
+              Correlation: cor,                                                                                                      
+              FromOwnIP:   fromOwnIP,                                                                                                
+          }                                                                                                                          
+          callback(pingback)                                                                                                         
+      })                                                                                                                             
+  }                                                                                                                                  
+                                                                                                                                     
+  // 自身 IP 检测：向 OOB URL 发一个 HTTP 请求，记录出口 IP                                                                          
+  func (o *OOBClient) DetectSelfIP() {                                                                                               
+      url := o.client.URL()                                                                                                          
+      uniqueID := strings.Split(url, ".")[0]                                                                                         
+      o.correlations.Store(uniqueID, &CorrelationEntry{PayloadKey: "__self_ip_check__"})                                             
+      http.Get("https://" + url)                                                                                                     
+  }                                                                                                                                  
+                                                                                                                                     
+  func (o *OOBClient) checkSelfIP(interaction *server.Interaction) {                                                                 
+      entry, ok := o.correlations.Load(interaction.UniqueID)                                                                         
+      if ok && entry.(*CorrelationEntry).PayloadKey == "__self_ip_check__" {                                                         
+          ip, _, _ := net.SplitHostPort(interaction.RemoteAddress)                                                                   
+          if ip == "" { ip = interaction.RemoteAddress }                                                                             
+          o.ownIPs.Store(ip, true)                                                                                                   
+      }                                                                                                                              
+  }                                                                                                                                  
+                                                                                                                                     
+  func (o *OOBClient) Shutdown() {                                                                                                   
+      o.client.StopPolling()                                                                                                         
+      o.client.Close()                                                                                                               
+  }                                                                                                                                  
+                                                                                                                                     
+  ---                                                                                                                                
+  模块 2：Payload 引擎（pkg/payload/）                                                                                               
+                                                                                                                                     
+  2.1 数据结构                                                                                                                       
+                                                                                                                                     
+  // pkg/payload/payload.go                                                                                                          
+                                                                                                                                     
+  type PayloadType string                                                                                                            
+  const (                                                                                                                            
+      PayloadTypeHeader PayloadType = "header"                                                                                       
+      PayloadTypeParam  PayloadType = "param"                                                                                        
+      PayloadTypeRaw    PayloadType = "raw"     // Cracking the Lens 畸形请求                                                        
+  )                                                                                                                                  
+                                                                                                                                     
+  type Payload struct {                                                                                                              
+      Active  bool        `json:"active" yaml:"active"`                                                                              
+      Type    PayloadType `json:"type" yaml:"type"`                                                                                  
+      Key     string      `json:"key" yaml:"key"`                                                                                    
+      Value   string      `json:"value" yaml:"value"`                                                                                
+      Group   string      `json:"group" yaml:"group"`     // "standard" / "cracking_the_lens"                                        
+      Comment string      `json:"comment" yaml:"comment"`                                                                            
+  }                                                                                                                                  
+                                                                                                                                     
+  2.2 占位符体系（兼容 Burp 插件格式）                                                                                               
+                                                                                                                                     
+  ┌────────┬─────────────────────────────┬───────────────────────────────────┐                                                       
+  │ 占位符 │           替换为            │               说明                │                                                       
+  ├────────┼─────────────────────────────┼───────────────────────────────────┤                                                       
+  │ %s     │ client.URL() 返回值         │ 每个 payload 实例独立 URL         │                                                       
+  ├────────┼─────────────────────────────┼───────────────────────────────────┤                                                       
+  │ %h     │ 目标请求的 Host 值          │ 用于 Host header 变体             │                                                       
+  ├────────┼─────────────────────────────┼───────────────────────────────────┤                                                       
+  │ %o     │ 扫描配置中提供的 Origin 值  │ 仅配置了 Origin 时启用，否则跳过  │                                                       
+  ├────────┼─────────────────────────────┼───────────────────────────────────┤                                                       
+  │ %r     │ 扫描配置中提供的 Referer 值 │ 仅配置了 Referer 时启用，否则跳过 │                                                       
+  └────────┴─────────────────────────────┴───────────────────────────────────┘                                                       
+                                                                                                                                     
+  注意：Burp 插件是代理模式，能从真实浏览器请求中获取 Origin/Referer。我们是主动扫描模式，需要用户在扫描配置 custom_headers 中提供   
+  Origin/Referer，或者自动用 https://{target_host}/ 作为 Referer 默认值。                                                            
+                                                                                                                                     
+  2.3 默认 Payload 列表                                                                                                              
+                                                                                                                                     
+  配置文件 configs/injections.yaml，程序启动加载，可通过 Web UI 编辑。                                                               
+                                                                                                                                     
+  A 组：标准 Header 注入（来自插件源码 injections 文件）                                                                             
+                                                                                                                                     
+  payloads:                                                                                                                          
+    # ===== 默认启用（插件 active 的 header）=====                                                                                   
+                                                                                                                                     
+    - { active: true,  type: header, key: Contact,              value: "root@%s",                                                    
+                                                   group: standard, comment: "触发邮件/联系人解析" }                                 
+    - { active: true,  type: header, key: From,                 value: "root@%s",                                                    
+                                                   group: standard, comment: "触发邮件发送" }                                        
+    - { active: true,  type: header, key: User-Agent,           value: 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/314.15       
+  (KHTML, like Gecko) Chrome/31.4.1592.65 Safari/314.15 <img src="https://%s">', group: standard, comment: "UA中嵌HTML —             
+  探测日志查看器SSRF" }                                                                                                              
+    - { active: true,  type: header, key: Referer,              value: "https://%s",                                                 
+                                                   group: standard, comment: "后端Referer追踪系统回调" }                             
+    - { active: true,  type: header, key: X-Original-URL,       value: "https://%s/",                                                
+                                                   group: standard, comment: "反向代理URL覆盖(IIS/Nginx)" }                          
+    - { active: true,  type: header, key: X-Wap-Profile,        value: "https://%s/wap.xml",                                         
+                                                   group: standard, comment: "WAP Profile获取 — 中间件主动fetch此URL" }              
+    - { active: true,  type: header, key: Profile,              value: "https://%s/wap.xml",                                         
+                                                   group: standard, comment: "同X-Wap-Profile" }                                     
+    - { active: true,  type: header, key: X-Arbitrary,          value: "https://%s/",                                                
+                                                    group: standard, comment: "测试中间件是否处理自定义header" }                     
+    - { active: true,  type: header, key: X-HTTP-DestinationURL,value: "https://%s/",                                                
+                                                    group: standard, comment: "目标URL覆盖" }                                        
+    - { active: true,  type: header, key: X-Forwarded,          value: "%s",                                                         
+                                                   group: standard, comment: "转发链探测" }                                          
+    - { active: true,  type: header, key: X-Forwarded-Proto,    value: "https://%s/",                                                
+                                                    group: standard, comment: "协议覆盖" }                                           
+    - { active: true,  type: header, key: X-Forwarded-Host,     value: "%s",                                                         
+                                                   group: standard, comment: "Host覆盖 — 后端可能据此发起请求" }                     
+    - { active: true,  type: header, key: X-Forwarded-For,      value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "IP伪造 — 后端可能做反向DNS" }                          
+    - { active: true,  type: header, key: X-Forwarded-Server,   value: "%s",                                                         
+                                                   group: standard, comment: "服务器标识覆盖" }                                      
+    - { active: true,  type: header, key: X-Host,               value: "%s",                                                         
+                                                   group: standard, comment: "Host覆盖" }                                            
+    - { active: true,  type: header, key: X-HTTP-Host-Override, value: "%s",                                                         
+                                                   group: standard, comment: "Host覆盖" }                                            
+    - { active: true,  type: header, key: Cluster-Client-IP,    value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "集群IP伪造" }                                          
+    - { active: true,  type: header, key: True-Client-IP,       value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "Akamai CDN IP覆盖" }                                   
+    - { active: true,  type: header, key: Client-IP,            value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "IP伪造" }                                              
+    - { active: true,  type: header, key: X-Client-IP,          value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "IP伪造" }                                              
+    - { active: true,  type: header, key: X-Real-IP,            value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "Nginx IP覆盖" }                                        
+    - { active: true,  type: header, key: X-Remote-IP,          value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "IP伪造" }                                              
+    - { active: true,  type: header, key: X-Originating-IP,     value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "IP伪造" }                                              
+    - { active: true,  type: header, key: X-ProxyUser-Ip,       value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "代理IP伪造" }                                          
+    - { active: true,  type: header, key: X-Remote-Addr,        value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "远程地址伪造" }                                        
+    - { active: true,  type: header, key: CF-Connecting_IP,     value: "spoofed.%s",                                                 
+                                                   group: standard, comment: "Cloudflare IP覆盖" }                                   
+    - { active: true,  type: header, key: Forwarded,            value: "for=spoofed.%s;by=spoofed.%s;host=spoofed.%s",               
+                                                    group: standard, comment: "RFC 7239标准转发 — 3个%s用同一个OOB URL" }            
+                                                                                                                                     
+    # ===== 默认禁用（插件中#注释的高风险payload）=====                                                                              
+                                                                                                                                     
+    - { active: false, type: header, key: Host,       value: "%h:%s",               group: standard, comment: "Host header注入 —     
+  可能破坏路由" }                                                                                                                    
+    - { active: false, type: header, key: Origin,     value: "https://%o.%s",       group: standard, comment: "Origin前缀注入 —      
+  需原始请求有Origin" }                                                                                                              
+    - { active: false, type: header, key: Proxy-Host, value: "%s",                  group: standard, comment: "代理Host" }           
+    - { active: false, type: header, key: Destination, value: "%s",                 group: standard, comment: "WebDAV目标" }         
+    - { active: false, type: header, key: Proxy,      value: "https://%s",          group: standard, comment: "httpoxy CVE-2016-5385"
+   }                                                                                                                                 
+    - { active: false, type: header, key: Via,         value: "1.1 %s",             group: standard, comment: "Via header" }         
+                                                                                                                                     
+    # ===== B组：URL参数注入（插件中全部默认禁用）=====                                                                              
+                                                                                                                                     
+    - { active: false, type: param, key: u,        value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: href,     value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: action,   value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: host,     value: "%s",          group: standard }                                           
+    - { active: false, type: param, key: http_host,value: "%s",          group: standard }                                           
+    - { active: false, type: param, key: email,    value: "root@%s",     group: standard }                                           
+    - { active: false, type: param, key: url,      value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: load,     value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: preview,  value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: target,   value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: proxy,    value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: from,     value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: src,      value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: ref,      value: "https://%s/", group: standard }                                           
+    - { active: false, type: param, key: referrer, value: "https://%s/", group: standard }                                           
+                                                                                                                                     
+    # ===== C组：Cracking the Lens 增强（全部默认禁用）=====                                                                         
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: absolute-url-host-mismatch                                                                                                
+      value: "GET https://%s{path} HTTP/1.1\r\nHost: {host}\r\n"                                                                     
+      group: cracking_the_lens                                                                                                       
+      comment: "请求行用绝对URL指向OOB，Host指向目标。某些反向代理优先用请求行URL路由"                                               
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: duplicate-host                                                                                                            
+      value: "Host: {host}\r\nHost: %s"                                                                                              
+      group: cracking_the_lens                                                                                                       
+      comment: "双Host header — 不同解析器取不同的值"                                                                                
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: host-with-at                                                                                                              
+      value: "Host: %s@{host}"                                                                                                       
+      group: cracking_the_lens                                                                                                       
+      comment: "Host中@符号 — URL解析混淆(userinfo@host)"                                                                            
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: host-at-reversed                                                                                                          
+      value: "Host: {host}@%s"                                                                                                       
+      group: cracking_the_lens                                                                                                       
+      comment: "反向@注入"                                                                                                           
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: host-with-hash                                                                                                            
+      value: "Host: {host}#%s"                                                                                                       
+      group: cracking_the_lens                                                                                                       
+      comment: "Host中#号 — 解析混淆"                                                                                                
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: host-crlf-inject                                                                                                          
+      value: "Host: {host}\r\nX-Injected: %s"                                                                                        
+      group: cracking_the_lens                                                                                                       
+      comment: "Host header CRLF注入 — 注入额外header行"                                                                             
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: host-with-space                                                                                                           
+      value: "Host: {host} %s"                                                                                                       
+      group: cracking_the_lens                                                                                                       
+      comment: "Host值空格 — 不同解析器截断点不同"                                                                                   
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: path-at-prefix                                                                                                            
+      value: "GET @%s{path} HTTP/1.1\r\nHost: {host}\r\n"                                                                            
+      group: cracking_the_lens                                                                                                       
+      comment: "路径前@号 — 代理误路由"                                                                                              
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: path-slash-prefix                                                                                                         
+      value: "GET /%s{path} HTTP/1.1\r\nHost: {host}\r\n"                                                                            
+      group: cracking_the_lens                                                                                                       
+      comment: "路径前注入OOB域名"                                                                                                   
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: sni-host-mismatch                                                                                                         
+      value: "sni=%s,host={host}"                                                                                                    
+      group: cracking_the_lens                                                                                                       
+      comment: "TLS SNI指向OOB，HTTP Host指向目标 — 探测前端按SNI路由的场景"                                                         
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: sni-host-mismatch-reversed                                                                                                
+      value: "sni={host},host=%s"                                                                                                    
+      group: cracking_the_lens                                                                                                       
+      comment: "反向：SNI保持目标，Host改为OOB"                                                                                      
+                                                                                                                                     
+    - active: false                                                                                                                  
+      type: raw                                                                                                                      
+      key: alt-ports                                                                                                                 
+      value: "ports=8080,8443,4443,8888,8000,9090,9443"                                                                              
+      group: cracking_the_lens                                                                                                       
+      comment: "对目标的非标准端口重发全部标准payload"                                                                               
+                                                                                                                                     
+  ---                                                                                                                                
+  模块 3：扫描引擎（pkg/scanner/）                                                                                                   
+                                                                                                                                     
+  3.1 扫描流程                                                                                                                       
+                                                                                                                                     
+  用户提交扫描任务（目标列表 + 模式 + 配置）                                                                                         
+           │                                                                                                                         
+           ▼                                                                                                                         
+      ┌──────────────────┐                                                                                                           
+      │ 1. 初始化         │                                                                                                          
+      │ - 创建 interactsh │                                                                                                          
+      │   client          │                                                                                                          
+      │ - 加载 payload    │                                                                                                          
+      │   模板            │                                                                                                          
+      │ - 自身 IP 检测    │                                                                                                          
+      └────────┬─────────┘                                                                                                           
+               ▼                                                                                                                     
+      ┌──────────────────┐                                                                                                           
+      │ 2. 生成请求       │  对每个 target × 每个 active payload：                                                                   
+      │                   │  - client.URL() 生成唯一 OOB URL                                                                         
+      │                   │  - 替换模板 %s/%h/%o/%r                                                                                  
+      │                   │  - 构建 HTTP 请求                                                                                        
+      │                   │  - 将 uniqueID → CorrelationEntry 注册到内存 map                                                         
+      │                   │  - 将 sent_payload 记录写入 PostgreSQL                                                                   
+      └────────┬─────────┘                                                                                                           
+               ▼                                                                                                                     
+      ┌──────────────────┐                                                                                                           
+      │ 3. 并发发送       │  - goroutine pool（可配置并发数，默认 50）                                                               
+      │                   │  - 所有请求带 Cache-Control: no-transform                                                                
+      │                   │  - 标准请求: net/http                                                                                    
+      │                   │  - raw 畸形请求: net.Conn + crypto/tls                                                                   
+      │                   │  - 可配置 rate limit (QPS)                                                                               
+      │                   │  - 可配置 HTTP/SOCKS5 代理                                                                               
+      │                   │  - 记录响应 status code                                                                                  
+      │                   │  - 进度通过 WebSocket 实时推送                                                                           
+      └────────┬─────────┘                                                                                                           
+               ▼                                                                                                                     
+      ┌──────────────────┐                                                                                                           
+      │ 4. 等待回调       │  - interactsh client 每 5s 轮询                                                                          
+      │  (status:         │  - 可配置最大等待时间（默认 30 min）                                                                     
+      │   waiting_callback│  - 每收到回调：关联查找 → 严重程度评估                                                                   
+      │                   │    → 写入 PostgreSQL → WebSocket 推送前端                                                                
+      └────────┬─────────┘                                                                                                           
+               ▼                                                                                                                     
+      ┌──────────────────┐                                                                                                           
+      │ 5. 完成           │  - StopPolling → Close interactsh client                                                                 
+      │                   │  - 更新任务状态为 completed                                                                              
+      └──────────────────┘                                                                                                           
+                                                                                                                                     
+  3.2 发送策略                                                                                                                       
+                                                                                                                                     
+  策略（与 Burp 插件一致）：对每个 target 发送 1 个请求，该请求同时携带所有 active payload header（每个 header 使用不同的 OOB        
+  URL）。回调通过不同的 UniqueID 精确定位是哪个 header 触发的。                                                                      
+                                                                                                                                     
+  对于 raw 类型 payload（Cracking the Lens），每个 raw payload 必须单独发一个请求，因为它们修改的是请求行或 TLS 层，无法合并。       
+                                                                                                                                     
+  3.3 标准 HTTP 发送器                                                                                                               
+                                                                                                                                     
+  // pkg/scanner/http_sender.go                                                                                                      
+                                                                                                                                     
+  func SendStandardRequest(ctx context.Context, target string, payloads []ResolvedPayload, client *http.Client) (*http.Response,     
+  error) {                                                                                                                           
+      req, _ := http.NewRequestWithContext(ctx, "GET", target, nil)                                                                  
+      req.Header.Set("Cache-Control", "no-transform")                                                                                
+                                                                                                                                     
+      for _, p := range payloads {                                                                                                   
+          switch p.Type {                                                                                                            
+          case PayloadTypeHeader:                                                                                                    
+              req.Header.Set(p.Key, p.Value)                                                                                         
+          case PayloadTypeParam:                                                                                                     
+              q := req.URL.Query()                                                                                                   
+              q.Set(p.Key, p.Value)                                                                                                  
+              req.URL.RawQuery = q.Encode()                                                                                          
+          }                                                                                                                          
+      }                                                                                                                              
+                                                                                                                                     
+      return client.Do(req)                                                                                                          
+  }                                                                                                                                  
+                                                                                                                                     
+  3.4 Raw Socket 发送器                                                                                                              
+                                                                                                                                     
+  // pkg/scanner/raw_sender.go                                                                                                       
+                                                                                                                                     
+  type RawRequest struct {                                                                                                           
+      Host     string                                                                                                                
+      Port     int                                                                                                                   
+      UseTLS   bool                                                                                                                  
+      SNIHost  string   // TLS SNI hostname，可与 Host header 不同                                                                   
+      RawBytes []byte   // 完整的原始 HTTP 请求字节                                                                                  
+  }                                                                                                                                  
+                                                                                                                                     
+  func SendRawRequest(ctx context.Context, r RawRequest) ([]byte, error) {                                                           
+      dialer := &net.Dialer{Timeout: 10 * time.Second}                                                                               
+      conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", r.Host, r.Port))                                              
+      if err != nil {                                                                                                                
+          return nil, err                                                                                                            
+      }                                                                                                                              
+      defer conn.Close()                                                                                                             
+                                                                                                                                     
+      if r.UseTLS {                                                                                                                  
+          tlsConn := tls.Client(conn, &tls.Config{                                                                                   
+              InsecureSkipVerify: true,                                                                                              
+              ServerName:         r.SNIHost,                                                                                         
+          })                                                                                                                         
+          if err := tlsConn.HandshakeContext(ctx); err != nil {                                                                      
+              return nil, err                                                                                                        
+          }                                                                                                                          
+          conn = tlsConn                                                                                                             
+      }                                                                                                                              
+                                                                                                                                     
+      conn.SetDeadline(time.Now().Add(10 * time.Second))                                                                             
+      conn.Write(r.RawBytes)                                                                                                         
+                                                                                                                                     
+      buf := make([]byte, 65535)                                                                                                     
+      n, _ := conn.Read(buf)                                                                                                         
+      return buf[:n], nil                                                                                                            
+  }                                                                                                                                  
+                                                                                                                                     
+  3.5 Cracking the Lens 请求构建器                                                                                                   
+                                                                                                                                     
+  // pkg/scanner/cracking.go                                                                                                         
+                                                                                                                                     
+  func BuildCrackingRequests(targetURL string, p Payload, oobURL string) []RawRequest {                                              
+      parsed, _ := url.Parse(targetURL)                                                                                              
+      host := parsed.Hostname()                                                                                                      
+      port := resolvePort(parsed) // 默认 https=443, http=80                                                                         
+      path := parsed.Path                                                                                                            
+      if path == "" { path = "/" }                                                                                                   
+      useTLS := parsed.Scheme == "https"                                                                                             
+                                                                                                                                     
+      var requests []RawRequest                                                                                                      
+                                                                                                                                     
+      switch p.Key {                                                                                                                 
+      case "absolute-url-host-mismatch":                                                                                             
+          raw := fmt.Sprintf("GET https://%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", oobURL, path, host)               
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "duplicate-host":                                                                                                         
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host, oobURL)             
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "host-with-at":                                                                                                           
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s@%s\r\nConnection: close\r\n\r\n", path, oobURL, host)                      
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "host-at-reversed":                                                                                                       
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s@%s\r\nConnection: close\r\n\r\n", path, host, oobURL)                      
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "host-with-hash":                                                                                                         
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s#%s\r\nConnection: close\r\n\r\n", path, host, oobURL)                      
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "host-crlf-inject":                                                                                                       
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nX-Injected: %s\r\nConnection: close\r\n\r\n", path, host, oobURL)       
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "host-with-space":                                                                                                        
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s %s\r\nConnection: close\r\n\r\n", path, host, oobURL)                      
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "path-at-prefix":                                                                                                         
+          raw := fmt.Sprintf("GET @%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", oobURL, path, host)                      
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "path-slash-prefix":                                                                                                      
+          raw := fmt.Sprintf("GET /%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", oobURL, path, host)                      
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: useTLS, SNIHost: host, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "sni-host-mismatch":                                                                                                      
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host)                                 
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: true, SNIHost: oobURL, RawBytes: []byte(raw)})      
+                                                                                                                                     
+      case "sni-host-mismatch-reversed":                                                                                             
+          raw := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, oobURL)                               
+          requests = append(requests, RawRequest{Host: host, Port: port, UseTLS: true, SNIHost: host, RawBytes: []byte(raw)})        
+                                                                                                                                     
+      case "alt-ports":                                                                                                              
+          // 由扫描引擎上层处理：对 8080,8443,4443,8888,8000,9090,9443 重复全部标准 payload                                          
+      }                                                                                                                              
+                                                                                                                                     
+      return requests                                                                                                                
+  }                                                                                                                                  
+                                                                                                                                     
+  3.6 扫描模式                                                                                                                       
+                                                                                                                                     
+  ┌──────────┬────────────────────────────────────────────────────┬────────────────────────────────────────┐                         
+  │   模式   │                   启用的 Payload                   │          预估请求量（单目标）          │                         
+  ├──────────┼────────────────────────────────────────────────────┼────────────────────────────────────────┤                         
+  │ quick    │ group=standard 且 active=true（约 27 个 header）   │ 1 个请求（合并所有 header）            │                         
+  ├──────────┼────────────────────────────────────────────────────┼────────────────────────────────────────┤                         
+  │ full     │ 全部 standard（header + param，约 48 个）          │ 1 个合并请求 + 15 个 param 独立请求    │                         
+  ├──────────┼────────────────────────────────────────────────────┼────────────────────────────────────────┤                         
+  │ cracking │ 全部 standard + 全部 cracking_the_lens（约 60 个） │ ~25 个请求（含 raw 独立请求 + 多端口） │                         
+  ├──────────┼────────────────────────────────────────────────────┼────────────────────────────────────────┤                         
+  │ custom   │ 用户手动勾选                                       │ 视选择而定                             │                         
+  └──────────┴────────────────────────────────────────────────────┴────────────────────────────────────────┘                         
+                                                                                                                                     
+  ---                                                                                                                                
+  模块 4：关联引擎与严重程度评估（pkg/correlator/）                                                                                  
+                                                                                                                                     
+  // pkg/correlator/pingback.go — Pingback 业务模型                                                                                  
+                                                                                                                                     
+  type Pingback struct {                                                                                                             
+      ID               string    `json:"id" gorm:"primaryKey"`                                                                       
+      ScanTaskID       string    `json:"scan_task_id" gorm:"index"`                                                                  
+      TargetURL        string    `json:"target_url"`                                                                                 
+      PayloadType      string    `json:"payload_type"`       // header / param / raw                                                 
+      PayloadKey       string    `json:"payload_key"`                                                                                
+      PayloadValue     string    `json:"payload_value"`                                                                              
+      SentAt           time.Time `json:"sent_at"`                                                                                    
+      CallbackProtocol string    `json:"callback_protocol" gorm:"index"` // dns / http / smtp / ldap / ftp                           
+      RemoteAddress    string    `json:"remote_address"`                                                                             
+      ReverseDNS       string    `json:"reverse_dns"`                                                                                
+      AsnInfo          string    `json:"asn_info" gorm:"type:jsonb"`     // interactsh 提供                                          
+      RawRequest       string    `json:"raw_request"`                                                                                
+      ReceivedAt       time.Time `json:"received_at"`                                                                                
+      DelaySeconds     float64   `json:"delay_seconds"`                                                                              
+      Severity         string    `json:"severity" gorm:"index"`          // low / medium / high / critical                           
+      FromOwnIP        bool      `json:"from_own_ip"`                                                                                
+      UniqueID         string    `json:"unique_id"`                                                                                  
+  }                                                                                                                                  
+                                                                                                                                     
+  // pkg/correlator/severity.go                                                                                                      
+                                                                                                                                     
+  func EvaluateSeverity(protocol string, fromOwnIP bool) string {                                                                    
+      if fromOwnIP {                                                                                                                 
+          return "low"                                                                                                               
+      }                                                                                                                              
+      switch protocol {                                                                                                              
+      case "dns":                                                                                                                    
+          return "medium"     // 后端解析了域名，不一定发起了请求                                                                    
+      case "http", "https":                                                                                                          
+          return "high"       // 后端发起了 HTTP 请求 → SSRF                                                                         
+      case "smtp":                                                                                                                   
+          return "high"       // 后端发了邮件                                                                                        
+      case "ldap":                                                                                                                   
+          return "critical"   // LDAP 外带 → Log4Shell 类                                                                            
+      case "ftp":                                                                                                                    
+          return "high"       // FTP 外带                                                                                            
+      default:                                                                                                                       
+          return "medium"                                                                                                            
+      }                                                                                                                              
+  }                                                                                                                                  
+                                                                                                                                     
+  ---                                                                                                                                
+  模块 5：REST API（internal/api/）                                                                                                  
+                                                                                                                                     
+  POST   /api/scan                 创建并启动扫描任务                                                                                
+  GET    /api/scan                 列出所有扫描任务                                                                                  
+  GET    /api/scan/:id             获取扫描任务详情                                                                                  
+  POST   /api/scan/:id/stop        停止扫描                                                                                          
+  DELETE /api/scan/:id             删除扫描任务及其数据                                                                              
+                                                                                                                                     
+  GET    /api/payloads             获取所有 payload 配置                                                                             
+  PUT    /api/payloads             批量更新 payload 配置                                                                             
+  PUT    /api/payloads/:index      更新单个 payload                                                                                  
+  POST   /api/payloads/import      导入 payload 文件（支持插件 injections 格式 + YAML）                                              
+  GET    /api/payloads/export      导出当前配置                                                                                      
+                                                                                                                                     
+  GET    /api/pingbacks            获取 pingback 列表（分页、过滤、排序）                                                            
+  GET    /api/pingbacks/:id        获取 pingback 详情                                                                                
+  GET    /api/pingbacks/export     导出为 JSON/CSV                                                                                   
+                                                                                                                                     
+  GET    /api/stats                仪表盘统计数据                                                                                    
+                                                                                                                                     
+  WS     /api/ws                   WebSocket — 实时推送新 pingback + 扫描进度                                                        
+                                                                                                                                     
+  创建扫描请求体：                                                                                                                   
+                                                                                                                                     
+  {                                                                                                                                  
+    "targets": ["https://example.com", "https://test.com/api"],                                                                      
+    "mode": "quick",                                                                                                                 
+    "concurrency": 50,                                                                                                               
+    "rate_limit": 100,                                                                                                               
+    "callback_timeout_minutes": 30,                                                                                                  
+    "proxy": "socks5://127.0.0.1:1080",                                                                                              
+    "interactsh_server": "",                                                                                                         
+    "interactsh_token": "",                                                                                                          
+    "custom_headers": {                                                                                                              
+      "Cookie": "session=abc123",                                                                                                    
+      "Authorization": "Bearer xxx"                                                                                                  
+    },                                                                                                                               
+    "default_referer": "https://example.com/",                                                                                       
+    "default_origin": "https://example.com",                                                                                         
+    "alt_ports": [8080, 8443, 4443]                                                                                                  
+  }                                                                                                                                  
+                                                                                                                                     
+  WebSocket 推送消息格式：                                                                                                           
+                                                                                                                                     
+  // 扫描进度                                                                                                                        
+  {"type": "scan_progress", "scan_id": "xxx", "sent": 150, "total": 200}                                                             
+                                                                                                                                     
+  // 新 pingback                                                                                                                     
+  {"type": "new_pingback", "data": { /* Pingback 对象 */ }}                                                                          
+                                                                                                                                     
+  // 扫描状态变更                                                                                                                    
+  {"type": "scan_status", "scan_id": "xxx", "status": "waiting_callback"}                                                            
+                                                                                                                                     
+  ---                                                                                                                                
+  模块 6：数据库模型（PostgreSQL）                                                                                                   
+                                                                                                                                     
+  GORM 自动迁移，无需手写 SQL。Go 结构体即是 schema：                                                                                
+                                                                                                                                     
+  // internal/database/models.go                                                                                                     
+                                                                                                                                     
+  type ScanTask struct {                                                                                                             
+      ID             string     `json:"id" gorm:"primaryKey"`                                                                        
+      Status         string     `json:"status" gorm:"default:pending;index"`  // pending/running/waiting_callback/completed/stopped  
+      Mode           string     `json:"mode"`                                                                                        
+      Config         string     `json:"config" gorm:"type:jsonb"`                                                                    
+      TargetCount    int        `json:"target_count"`                                                                                
+      RequestSent    int        `json:"request_sent"`                                                                                
+      PingbackCount  int        `json:"pingback_count"`                                                                              
+      CreatedAt      time.Time  `json:"created_at"`                                                                                  
+      StartedAt      *time.Time `json:"started_at"`                                                                                  
+      CompletedAt    *time.Time `json:"completed_at"`                                                                                
+  }                                                                                                                                  
+                                                                                                                                     
+  type SentPayload struct {                                                                                                          
+      UniqueID       string    `json:"unique_id" gorm:"primaryKey"`                                                                  
+      ScanTaskID     string    `json:"scan_task_id" gorm:"index"`                                                                    
+      TargetURL      string    `json:"target_url"`                                                                                   
+      PayloadType    string    `json:"payload_type"`                                                                                 
+      PayloadKey     string    `json:"payload_key"`                                                                                  
+      PayloadValue   string    `json:"payload_value"`                                                                                
+      ResponseStatus int       `json:"response_status"`                                                                              
+      SentAt         time.Time `json:"sent_at"`                                                                                      
+  }                                                                                                                                  
+                                                                                                                                     
+  type Pingback struct {                                                                                                             
+      ID               string    `json:"id" gorm:"primaryKey"`                                                                       
+      UniqueID         string    `json:"unique_id" gorm:"index"`                                                                     
+      ScanTaskID       string    `json:"scan_task_id" gorm:"index"`                                                                  
+      TargetURL        string    `json:"target_url"`                                                                                 
+      PayloadType      string    `json:"payload_type"`                                                                               
+      PayloadKey       string    `json:"payload_key" gorm:"index"`                                                                   
+      PayloadValue     string    `json:"payload_value"`                                                                              
+      CallbackProtocol string    `json:"callback_protocol" gorm:"index"`                                                             
+      RemoteAddress    string    `json:"remote_address"`                                                                             
+      ReverseDNS       string    `json:"reverse_dns"`                                                                                
+      AsnInfo          string    `json:"asn_info" gorm:"type:jsonb"`                                                                 
+      RawRequest       string    `json:"raw_request"`                                                                                
+      SentAt           time.Time `json:"sent_at"`                                                                                    
+      ReceivedAt       time.Time `json:"received_at"`                                                                                
+      DelaySeconds     float64   `json:"delay_seconds"`                                                                              
+      Severity         string    `json:"severity" gorm:"index"`                                                                      
+      FromOwnIP        bool      `json:"from_own_ip"`                                                                                
+  }                                                                                                                                  
+                                                                                                                                     
+  ---                                                                                                                                
+  模块 7：Web 前端（frontend/）                                                                                                      
+                                                                                                                                     
+  Vue 3 + Vite + Element Plus（或 Naive UI）。                                                                                       
+                                                                                                                                     
+  ┌──────────┬───────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────┐  
+  │   页面   │   路由    │                                                  功能                                                  │  
+  ├──────────┼───────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ 仪表盘   │ /         │ 总览统计（扫描数/pingback数/按severity分布/按protocol分布）+ 最近 pingback 实时滚动                    │  
+  ├──────────┼───────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ 扫描任务 │ /scans    │ 创建扫描（目标输入+模式选择+参数配置），任务列表，状态/进度，操作（停止/删除/查看结果）                │  
+  ├──────────┼───────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ Payload  │ /payloads │ 按 group 折叠的表格，启用开关，模式快捷按钮（一键 quick/full/cracking），增删改，导入导出              │  
+  ├──────────┼───────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ 结果     │ /results  │ 主表格 + 侧边过滤器（severity/protocol/payload key/目标域名/是否自身IP），行展开详情（原始payload +    │  
+  │          │           │ 回调原始数据 + ASN），导出 JSON/CSV                                                                    │  
+  ├──────────┼───────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ 设置     │ /settings │ Interactsh 服务器/Token，默认并发/rate limit/超时，自身IP处理策略                                      │  
+  └──────────┴───────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────┘  
+                                                                                                                                     
+  ---                                                                                                                                
+  六、项目目录结构                                                                                                                   
+                                                                                                                                     
+  hidden-attack-surface-scanner/                                                                                                     
+  ├── cmd/                                                                                                                           
+  │   └── server/                                                                                                                    
+  │       └── main.go                                                                                                                
+  ├── configs/                                                                                                                       
+  │   ├── injections.yaml                                                                                                            
+  │   └── config.yaml                                                                                                                
+  ├── internal/                                                                                                                      
+  │   ├── api/                                                                                                                       
+  │   │   ├── router.go                                                                                                              
+  │   │   ├── scan_handler.go                                                                                                        
+  │   │   ├── payload_handler.go                                                                                                     
+  │   │   ├── result_handler.go                                                                                                      
+  │   │   └── ws_handler.go                                                                                                          
+  │   ├── config/                                                                                                                    
+  │   │   └── config.go                                                                                                              
+  │   └── database/                                                                                                                  
+  │       ├── db.go                                                                                                                  
+  │       └── models.go                                                                                                              
+  ├── pkg/                                                                                                                           
+  │   ├── oob/                                                                                                                       
+  │   │   └── client.go                                                                                                              
+  │   ├── payload/                                                                                                                   
+  │   │   ├── payload.go                                                                                                             
+  │   │   ├── loader.go                                                                                                              
+  │   │   └── resolver.go                                                                                                            
+  │   ├── scanner/                                                                                                                   
+  │   │   ├── engine.go                                                                                                              
+  │   │   ├── http_sender.go                                                                                                         
+  │   │   ├── raw_sender.go                                                                                                          
+  │   │   └── cracking.go                                                                                                            
+  │   └── correlator/                                                                                                                
+  │       ├── correlator.go                                                                                                          
+  │       └── severity.go                                                                                                            
+  ├── frontend/                                                                                                                      
+  │   ├── src/                                                                                                                       
+  │   │   ├── views/                                                                                                                 
+  │   │   │   ├── Dashboard.vue                                                                                                      
+  │   │   │   ├── Scans.vue                                                                                                          
+  │   │   │   ├── Payloads.vue                                                                                                       
+  │   │   │   ├── Results.vue                                                                                                        
+  │   │   │   └── Settings.vue                                                                                                       
+  │   │   ├── components/                                                                                                            
+  │   │   ├── api/                                                                                                                   
+  │   │   └── stores/                                                                                                                
+  │   ├── package.json                                                                                                               
+  │   ├── vite.config.js                                                                                                             
+  │   ├── Dockerfile                                                                                                                 
+  │   └── nginx.conf                                                                                                                 
+  ├── Dockerfile.backend                                                                                                             
+  ├── docker-compose.yml                                                                                                             
+  ├── .env.example                                                                                                                   
+  ├── go.mod                                                                                                                         
+  ├── go.sum                                                                                                                         
+  ├── Makefile                                                                                                                       
+  └── README.md                                                                                                                      
+                                                                                                                                     
+  ---                                                                                                                                
+  七、启动方式                                                                                                                       
+                                                                                                                                     
+  # 1. 复制环境变量                                                                                                                  
+  cp .env.example .env                                                                                                               
+  # 编辑 .env 设置 DB_PASSWORD, INTERACTSH_SERVER, INTERACTSH_TOKEN                                                                  
+                                                                                                                                     
+  # 2. 一键启动                                                                                                                      
+  docker compose up -d --build                                                                                                       
+                                                                                                                                     
+  # 3. 访问                                                                                                                          
+  # Web UI: http://localhost                                                                                                         
+  # API:    http://localhost/api/                                                                                                    
+                                                                                                                                     
+  ---                                                                                                                                
+  八、关键实现注意事项                                                                                                               
+                                                                                                                                     
+  1. 每个 payload 的 OOB URL 必须唯一 — 每次调用 client.URL() 生成新 URL，确保回调能精确关联到具体的 target + payload 组合           
+  2. Forwarded header 特殊处理 — 值中有 3 个 %s，全部替换为同一个 OOB URL（只调用一次 client.URL()）                                 
+  3. %o 和 %r 占位符 — 主动扫描无浏览器上下文，需使用扫描配置中的 default_origin/default_referer，若未配置则跳过对应 payload         
+  4. Cache-Control: no-transform — 所有请求固定携带，防止中间代理修改内容                                                            
+  5. interactsh client 生命周期 — 每个扫描任务独立实例，完成后 StopPolling → Close 正确注销                                          
+  6. Raw 请求用 net.Conn — Go net/http 不支持畸形请求行/双 Host/CRLF 注入，必须直接操作 TCP                                          
+  7. 去重 — 同一个 UniqueID 可能触发多次 DNS 查询，按 UniqueID 去重，只记录第一次回调                                                
+  8. interactsh 公共服务器 — 不填 INTERACTSH_SERVER 时默认使用                                                                       
+  oast.pro,oast.live,oast.site,oast.online,oast.fun,oast.me，无需自建也能工作。自建只是更可控 

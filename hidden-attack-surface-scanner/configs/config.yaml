@@ -1,0 +1,24 @@
+server:
+  listen: ":8080"
+
+database:
+  host: "127.0.0.1"
+  port: 5432
+  name: "hass"
+  user: "hass"
+  password: "changeme"
+  sslmode: "disable"
+
+interactsh:
+  server_url: ""
+  token: ""
+
+scanner:
+  default_concurrency: 10
+  default_rate_limit: 20
+  default_timeout_minutes: 30
+  default_origin: ""
+  default_referer: ""
+
+own_ip:
+  action: "mark"
