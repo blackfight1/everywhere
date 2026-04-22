@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"hidden-attack-surface-scanner/pkg/payload"
@@ -71,6 +72,10 @@ func SendStandardRequest(
 	for _, item := range payloads {
 		switch item.Type {
 		case payload.TypeHeader:
+			if strings.EqualFold(item.Key, "Host") {
+				req.Host = item.ResolvedValue
+				continue
+			}
 			req.Header.Set(item.Key, item.ResolvedValue)
 		case payload.TypeParam:
 			query := req.URL.Query()

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { routes } from './router/index.js';
 import { useAppStore } from './stores/app.js';
@@ -11,6 +11,19 @@ const route = useRoute();
 const app = useAppStore();
 const ws = useWebSocketStore();
 const toast = useToastStore();
+
+const routeCopy = {
+  dashboard: 'Recent activity, active scans, and callback pressure.',
+  scans: 'Create scan jobs, monitor dispatch progress, and stop noisy runs.',
+  payloads: 'Control the exact headers, params, and raw variants used by the scanner.',
+  results: 'Inspect callbacks, pivot to the originating payload, and export evidence.',
+  settings: 'Set OOB defaults, scan limits, and own-IP handling behavior.',
+  debug: 'Read websocket logs and server-side scan events as they arrive.',
+};
+
+const activeLabel = computed(() => route.meta?.title || 'Dashboard');
+const activeCopy = computed(() => routeCopy[route.name] || 'Operate the scanner from a single control surface.');
+const navItems = computed(() => routes.filter((item) => item.name !== 'debug'));
 
 onMounted(async () => {
   await app.refreshAll();
@@ -27,43 +40,64 @@ function navTo(name) {
   <div class="shell">
     <aside class="sidebar">
       <div class="sidebar-brand" @click="navTo('dashboard')">
-        <span class="brand-icon">⬡</span>
-        <div class="brand-text">
-          <strong>HASS</strong>
-          <small>Hidden Attack Surface Scanner</small>
+        <span class="brand-mark">HS</span>
+        <div class="brand-copy">
+          <strong>Hidden Surface Scanner</strong>
+          <small>OOB-first detection workspace</small>
         </div>
       </div>
 
       <nav class="sidebar-nav">
         <button
-          v-for="r in routes"
+          v-for="r in navItems"
           :key="r.name"
-          :class="{ active: route.name === r.name }"
+          :class="['nav-button', { active: route.name === r.name }]"
           @click="navTo(r.name)"
         >
           <span class="nav-icon">{{ r.meta.icon }}</span>
-          <span>{{ r.meta.title }}</span>
+          <span class="nav-text">{{ r.meta.title }}</span>
         </button>
       </nav>
 
-      <div class="sidebar-footer">
-        <div class="ws-status" :class="{ online: ws.connected }">
-          <span class="ws-dot"></span>
-          {{ ws.connected ? 'Connected' : 'Disconnected' }}
+      <div class="sidebar-summary">
+        <div class="summary-row">
+          <span>WebSocket</span>
+          <strong :class="['status-inline', ws.connected ? 'is-online' : 'is-offline']">
+            {{ ws.connected ? 'online' : 'offline' }}
+          </strong>
+        </div>
+        <div class="summary-row">
+          <span>Active scans</span>
+          <strong>{{ app.stats.active_count || 0 }}</strong>
+        </div>
+        <div class="summary-row">
+          <span>Pingbacks</span>
+          <strong>{{ app.stats.pingback_count || 0 }}</strong>
         </div>
       </div>
     </aside>
 
     <main class="content">
       <header class="page-header">
-        <h1 class="page-title">{{ route.meta?.title || 'Dashboard' }}</h1>
-        <div class="header-actions">
-          <span class="header-stat" data-tooltip="Active scans">
-            🔍 {{ app.stats.active_count }} active
-          </span>
-          <span class="header-stat" data-tooltip="Total pingbacks">
-            🎯 {{ app.stats.pingback_count }} pingbacks
-          </span>
+        <div class="page-heading">
+          <span class="page-kicker">{{ activeLabel }}</span>
+          <h1 class="page-title">{{ activeLabel }}</h1>
+          <p class="page-copy">{{ activeCopy }}</p>
+        </div>
+
+        <div class="header-strip">
+          <div class="header-chip">
+            <span>Scans</span>
+            <strong>{{ app.stats.scan_count || 0 }}</strong>
+          </div>
+          <div class="header-chip">
+            <span>Active</span>
+            <strong>{{ app.stats.active_count || 0 }}</strong>
+          </div>
+          <div class="header-chip accent">
+            <span>Pingbacks</span>
+            <strong>{{ app.stats.pingback_count || 0 }}</strong>
+          </div>
         </div>
       </header>
 
@@ -76,7 +110,6 @@ function navTo(name) {
       </div>
     </main>
 
-    <!-- Toast notifications -->
     <div class="toast-container">
       <div
         v-for="t in toast.items"

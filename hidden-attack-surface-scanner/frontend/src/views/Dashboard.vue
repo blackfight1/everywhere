@@ -6,185 +6,158 @@ import { useRouter } from 'vue-router';
 const app = useAppStore();
 const router = useRouter();
 
-onMounted(() => { app.loadStats(); });
+onMounted(async () => {
+  await Promise.all([app.loadStats(), app.loadScans()]);
+});
+
+const activeScans = computed(() =>
+  (app.scans || []).filter((scan) => ['pending', 'running', 'waiting_callback'].includes(scan.status)).slice(0, 6)
+);
+
+const recent = computed(() => app.stats.recent || []);
 
 const severityBreakdown = computed(() => {
   const map = { critical: 0, high: 0, medium: 0, low: 0 };
-  (app.stats.recent || []).forEach(p => {
-    if (map[p.severity] !== undefined) map[p.severity]++;
+  recent.value.forEach((item) => {
+    if (map[item.severity] !== undefined) map[item.severity] += 1;
   });
   return map;
 });
 
 const protocolBreakdown = computed(() => {
   const map = {};
-  (app.stats.recent || []).forEach(p => {
-    const proto = p.callback_protocol || 'unknown';
-    map[proto] = (map[proto] || 0) + 1;
+  recent.value.forEach((item) => {
+    const key = item.callback_protocol || 'unknown';
+    map[key] = (map[key] || 0) + 1;
   });
-  return map;
+  return Object.entries(map);
 });
 
-function formatTime(t) {
-  if (!t) return '-';
-  const d = new Date(t);
-  return d.toLocaleString();
+function formatTime(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
 }
 
-function severityClass(s) {
-  return `badge badge-${s || 'info'}`;
+function severityClass(value) {
+  return `badge badge-${value || 'info'}`;
 }
 
-function protocolClass(p) {
-  return `badge protocol-${p || 'dns'}`;
+function protocolClass(value) {
+  return `badge protocol-${value || 'unknown'}`;
+}
+
+function scanBadge(status) {
+  return `badge badge-${status || 'pending'}`;
 }
 </script>
 
 <template>
-  <div class="dashboard">
-    <!-- Metric Cards -->
-    <div class="metric-grid">
-      <article class="panel metric-card" @click="router.push('/scans')">
-        <div class="metric-icon">üîç</div>
-        <div class="metric-body">
-          <span class="metric-label">Total Scans</span>
-          <strong class="metric-value">{{ app.stats.scan_count }}</strong>
+  <div class="dashboard-page">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Operations overview</h2>
+          <p>Monitor scan volume, live callback pressure, and the jobs currently consuming bandwidth.</p>
         </div>
-      </article>
-
-      <article class="panel metric-card accent" @click="router.push('/scans')">
-        <div class="metric-icon">‚ö°</div>
-        <div class="metric-body">
-          <span class="metric-label">Active Scans</span>
-          <strong class="metric-value">{{ app.stats.active_count }}</strong>
+        <div class="inline-actions">
+          <button class="ghost-button" @click="router.push('/scans')">Open scans</button>
+          <button class="primary" @click="router.push('/results')">Review results</button>
         </div>
-      </article>
+      </div>
 
-      <article class="panel metric-card" @click="router.push('/results')">
-        <div class="metric-icon">üéØ</div>
-        <div class="metric-body">
-          <span class="metric-label">Total Pingbacks</span>
-          <strong class="metric-value">{{ app.stats.pingback_count }}</strong>
-        </div>
-      </article>
+      <div class="stat-strip">
+        <div class="stat-block"><span>Total scans</span><strong>{{ app.stats.scan_count || 0 }}</strong></div>
+        <div class="stat-block"><span>Active scans</span><strong>{{ app.stats.active_count || 0 }}</strong></div>
+        <div class="stat-block"><span>Total pingbacks</span><strong>{{ app.stats.pingback_count || 0 }}</strong></div>
+        <div class="stat-block"><span>Recent callbacks</span><strong>{{ recent.length }}</strong></div>
+      </div>
+    </section>
 
-      <article class="panel metric-card">
-        <div class="metric-icon">üìä</div>
-        <div class="metric-body">
-          <span class="metric-label">Severity Distribution</span>
-          <div class="severity-pills">
-            <span class="badge badge-critical" v-if="severityBreakdown.critical">{{ severityBreakdown.critical }} Critical</span>
-            <span class="badge badge-high" v-if="severityBreakdown.high">{{ severityBreakdown.high }} High</span>
-            <span class="badge badge-medium" v-if="severityBreakdown.medium">{{ severityBreakdown.medium }} Medium</span>
-            <span class="badge badge-low" v-if="severityBreakdown.low">{{ severityBreakdown.low }} Low</span>
-            <span class="badge badge-info" v-if="!app.stats.recent?.length">No data yet</span>
+    <div class="workspace-grid">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Recent pingbacks</h2>
+            <p>The latest callback evidence received by the backend.</p>
           </div>
+          <button class="ghost-button" @click="router.push('/results')">View all</button>
         </div>
-      </article>
-    </div>
 
-    <!-- Protocol Breakdown -->
-    <div class="panel" v-if="Object.keys(protocolBreakdown).length">
-      <h2>Protocol Breakdown</h2>
-      <div class="protocol-bar">
-        <span v-for="(count, proto) in protocolBreakdown" :key="proto" :class="protocolClass(proto)">
-          {{ proto.toUpperCase() }}: {{ count }}
-        </span>
-      </div>
-    </div>
+        <div class="table-shell" v-if="recent.length">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Protocol</th>
+                <th>Payload</th>
+                <th>Target</th>
+                <th>Remote IP</th>
+                <th>Severity</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in recent" :key="item.id">
+                <td class="mono">{{ formatTime(item.received_at) }}</td>
+                <td><span :class="protocolClass(item.callback_protocol)">{{ item.callback_protocol }}</span></td>
+                <td class="mono">{{ item.payload_key }}</td>
+                <td class="mono truncate">{{ item.target_url }}</td>
+                <td class="mono">{{ item.remote_address }}</td>
+                <td><span :class="severityClass(item.severity)">{{ item.severity }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="empty-state">
+          <strong>No callback evidence yet.</strong>
+          <p class="muted">Start a scan and wait for the polling window to capture outbound interactions.</p>
+        </div>
+      </section>
 
-    <!-- Recent Pingbacks -->
-    <div class="panel">
-      <div class="section-header">
-        <h2>Recent Pingbacks</h2>
-        <button class="ghost-button" @click="router.push('/results')">View All ‚Üí</button>
-      </div>
+      <div class="stack-panel">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Live queue</h2>
+              <p>Scans still dispatching requests or waiting for late callbacks.</p>
+            </div>
+          </div>
 
-      <div class="table-shell" v-if="app.stats.recent?.length">
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Protocol</th>
-              <th>Payload Key</th>
-              <th>Target</th>
-              <th>Remote IP</th>
-              <th>Severity</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in app.stats.recent" :key="item.id">
-              <td class="mono">{{ formatTime(item.received_at) }}</td>
-              <td><span :class="protocolClass(item.callback_protocol)">{{ item.callback_protocol }}</span></td>
-              <td class="mono">{{ item.payload_key }}</td>
-              <td class="mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis">{{ item.target_url }}</td>
-              <td class="mono">{{ item.remote_address }}</td>
-              <td><span :class="severityClass(item.severity)">{{ item.severity }}</span></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="empty-state" v-else>
-        No pingbacks received yet. Start a scan to begin detecting hidden attack surfaces.
+          <div class="stack-list" v-if="activeScans.length">
+            <div v-for="scan in activeScans" :key="scan.id" class="list-row">
+              <div class="list-main">
+                <strong class="mono">{{ scan.id.slice(0, 8) }}</strong>
+                <span class="list-meta">{{ scan.mode }} mode °§ {{ scan.target_count }} targets</span>
+              </div>
+              <span :class="scanBadge(scan.status)">{{ scan.status }}</span>
+            </div>
+          </div>
+          <div v-else class="empty-state">
+            <strong>No active queue.</strong>
+            <p class="muted">There are no running or waiting scan tasks right now.</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Breakdown</h2>
+              <p>Current severity and protocol mix from recent callback evidence.</p>
+            </div>
+          </div>
+
+          <div class="key-list">
+            <div class="kv-row"><span>Critical</span><strong>{{ severityBreakdown.critical }}</strong></div>
+            <div class="kv-row"><span>High</span><strong>{{ severityBreakdown.high }}</strong></div>
+            <div class="kv-row"><span>Medium</span><strong>{{ severityBreakdown.medium }}</strong></div>
+            <div class="kv-row"><span>Low</span><strong>{{ severityBreakdown.low }}</strong></div>
+          </div>
+
+          <div class="tag-row" style="margin-top: 16px">
+            <span v-for="[protocol, count] in protocolBreakdown" :key="protocol" :class="protocolClass(protocol)">{{ protocol }} °§ {{ count }}</span>
+            <span v-if="!protocolBreakdown.length" class="badge badge-info">no protocol data</span>
+          </div>
+        </section>
       </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.dashboard {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-}
-
-.metric-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-}
-
-.metric-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
-}
-
-.metric-card.accent {
-  border-color: var(--accent);
-  box-shadow: var(--shadow-glow);
-}
-
-.metric-icon {
-  font-size: 2rem;
-  line-height: 1;
-}
-
-.metric-body {
-  flex: 1;
-}
-
-.severity-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.protocol-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.section-header {
-  margin-bottom: 0;
-}
-</style>

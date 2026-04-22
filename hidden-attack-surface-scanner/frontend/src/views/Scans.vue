@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, onMounted } from 'vue';
+import { reactive, ref, onMounted, computed } from 'vue';
 import { api } from '../api/index.js';
 import { useAppStore } from '../stores/app.js';
 import { useToastStore } from '../stores/toast.js';
@@ -8,8 +8,7 @@ import { useRouter } from 'vue-router';
 const app = useAppStore();
 const toast = useToastStore();
 const router = useRouter();
-
-const showForm = ref(false);
+const showForm = ref(true);
 const submitting = ref(false);
 const confirmDelete = ref(null);
 
@@ -40,17 +39,27 @@ onMounted(async () => {
 });
 
 const modeDescriptions = {
-  quick: 'Standard active headers only (~27 headers merged into 1 request per target)',
-  full: 'All standard headers + URL params (~48 payloads, ~16 requests per target)',
-  cracking: 'Full + Cracking the Lens raw payloads (~60 payloads, ~25 requests per target)',
-  custom: 'Only manually enabled payloads in the Payloads tab',
+  quick: '1 merged default request + 1 dedicated Host override request per target.',
+  full: 'All active standard payloads, while Host remains isolated in its own request.',
+  cracking: 'Full mode plus any enabled raw Cracking the Lens variants.',
+  custom: 'Use only the payloads currently enabled in the Payloads workspace.',
 };
+
+const queueStats = computed(() => ({
+  total: app.scans.length,
+  running: app.scans.filter((scan) => scan.status === 'running').length,
+  waiting: app.scans.filter((scan) => scan.status === 'waiting_callback').length,
+  hits: app.scans.filter((scan) => (scan.pingback_count || 0) > 0).length,
+}));
 
 async function startScan() {
   submitting.value = true;
   try {
-    const targets = form.targets.split('\n').map(t => t.trim()).filter(Boolean);
-    if (!targets.length) { toast.error('Please enter at least one target URL'); return; }
+    const targets = form.targets.split('\n').map((item) => item.trim()).filter(Boolean);
+    if (!targets.length) {
+      toast.error('Please enter at least one target URL');
+      return;
+    }
 
     let customHeaders = {};
     if (form.custom_headers.trim()) {
@@ -58,7 +67,7 @@ async function startScan() {
       catch { toast.error('Custom headers must be valid JSON'); return; }
     }
 
-    const payload = {
+    await api.createScan({
       targets,
       mode: form.mode,
       concurrency: Number(form.concurrency),
@@ -68,12 +77,11 @@ async function startScan() {
       default_origin: form.default_origin,
       default_referer: form.default_referer,
       custom_headers: customHeaders,
-    };
+    });
 
-    await api.createScan(payload);
-    toast.success(`Scan started with ${targets.length} target(s) in ${form.mode} mode`);
-    showForm.value = false;
+    toast.success(`Scan started with ${targets.length} target(s)`);
     await app.refreshAll();
+    router.push({ name: 'results' });
   } catch (e) {
     toast.error(e.message);
   } finally {
@@ -82,206 +90,86 @@ async function startScan() {
 }
 
 async function stopScan(id) {
-  try {
-    await api.stopScan(id);
-    toast.info('Scan stop requested');
-    await app.loadScans();
-  } catch (e) { toast.error(e.message); }
+  try { await api.stopScan(id); toast.info('Scan stop requested'); await app.loadScans(); }
+  catch (e) { toast.error(e.message); }
 }
 
 async function deleteScan(id) {
-  try {
-    await api.deleteScan(id);
-    toast.success('Scan deleted');
-    confirmDelete.value = null;
-    await app.refreshAll();
-  } catch (e) { toast.error(e.message); }
+  try { await api.deleteScan(id); toast.success('Scan deleted'); confirmDelete.value = null; await app.refreshAll(); }
+  catch (e) { toast.error(e.message); }
 }
 
-function viewResults(id) {
-  router.push({ name: 'results', query: { scan_task_id: id } });
-}
-
-function statusClass(status) {
-  return `badge badge-${status || 'pending'}`;
-}
-
-function progressPercent(scan) {
-  if (!scan._total || scan._total === 0) return null;
-  return Math.round((scan.request_sent / scan._total) * 100);
-}
-
-function formatTime(t) {
-  if (!t) return '-';
-  return new Date(t).toLocaleString();
-}
-
-function shortId(id) {
-  return id?.substring(0, 8) || '-';
-}
+function viewResults(id) { router.push({ name: 'results', query: { scan_task_id: id } }); }
+function statusClass(status) { return `badge badge-${status || 'pending'}`; }
+function progressPercent(scan) { if (!scan._total || scan._total === 0) return null; return Math.round((scan.request_sent / scan._total) * 100); }
+function formatTime(value) { if (!value) return '-'; return new Date(value).toLocaleString(); }
+function shortId(id) { return id?.substring(0, 8) || '-'; }
 </script>
 
 <template>
   <div class="scans-page">
-    <!-- Action Bar -->
-    <div class="action-bar">
-      <button class="primary" @click="showForm = !showForm">
-        {{ showForm ? '✕ Close' : '+ New Scan' }}
-      </button>
-      <button class="ghost-button" @click="app.loadScans()">↻ Refresh</button>
-    </div>
-
-    <!-- Scan Form -->
-    <transition name="tab-content">
-      <div v-if="showForm" class="panel scan-form">
-        <h2>Create New Scan</h2>
-
-        <div class="form-group">
-          <label>Target URLs <small class="muted">(one per line)</small></label>
-          <textarea v-model="form.targets" rows="6" placeholder="https://example.com&#10;https://api.example.com&#10;https://admin.example.com"></textarea>
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Scan planner</h2>
+          <p>Define targets, dispatch mode, and callback window before the backend starts sending requests.</p>
         </div>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label>Scan Mode</label>
-            <select v-model="form.mode">
-              <option value="quick">Quick</option>
-              <option value="full">Full</option>
-              <option value="cracking">Cracking the Lens</option>
-              <option value="custom">Custom</option>
-            </select>
-            <small class="muted">{{ modeDescriptions[form.mode] }}</small>
-          </div>
-
-          <div class="form-group">
-            <label>Concurrency</label>
-            <input v-model.number="form.concurrency" type="number" min="1" max="500" />
-          </div>
-
-          <div class="form-group">
-            <label>Rate Limit (QPS)</label>
-            <input v-model.number="form.rate_limit" type="number" min="0" />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label>Callback Timeout (min)</label>
-            <input v-model.number="form.callback_timeout_minutes" type="number" min="1" />
-          </div>
-
-          <div class="form-group">
-            <label>Proxy</label>
-            <input v-model="form.proxy" placeholder="http://127.0.0.1:8080 or socks5://..." />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label>Default Origin <small class="muted">(for %o placeholder)</small></label>
-            <input v-model="form.default_origin" placeholder="https://example.com" />
-          </div>
-          <div class="form-group">
-            <label>Default Referer <small class="muted">(for %r placeholder)</small></label>
-            <input v-model="form.default_referer" placeholder="https://example.com/" />
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label>Custom Headers <small class="muted">(JSON object, e.g. {"Cookie":"session=abc"})</small></label>
-          <textarea v-model="form.custom_headers" rows="3" placeholder='{"Cookie": "session=abc123", "Authorization": "Bearer xxx"}'></textarea>
-        </div>
-
-        <div class="form-actions">
-          <button class="ghost-button" @click="showForm = false">Cancel</button>
-          <button class="primary" :disabled="submitting" @click="startScan">
-            {{ submitting ? 'Starting...' : '🚀 Start Scan' }}
-          </button>
+        <div class="inline-actions">
+          <button class="ghost-button" @click="showForm = !showForm">{{ showForm ? 'Hide form' : 'Show form' }}</button>
+          <button class="ghost-button" @click="app.loadScans()">Refresh queue</button>
         </div>
       </div>
-    </transition>
 
-    <!-- Scans Table -->
-    <div class="panel">
-      <h2>Scan Tasks</h2>
+      <div class="stat-strip">
+        <div class="stat-block"><span>Total jobs</span><strong>{{ queueStats.total }}</strong></div>
+        <div class="stat-block"><span>Running</span><strong>{{ queueStats.running }}</strong></div>
+        <div class="stat-block"><span>Waiting callback</span><strong>{{ queueStats.waiting }}</strong></div>
+        <div class="stat-block"><span>Jobs with hits</span><strong>{{ queueStats.hits }}</strong></div>
+      </div>
+
+      <div v-if="showForm" class="form-grid" style="margin-top: 18px">
+        <div class="form-group form-span-12">
+          <label>Targets</label>
+          <textarea v-model="form.targets" rows="7" placeholder="https://app.example.com&#10;https://api.example.com&#10;https://admin.example.com"></textarea>
+        </div>
+        <div class="form-group form-span-4"><label>Mode</label><select v-model="form.mode"><option value="quick">Quick</option><option value="full">Full</option><option value="cracking">Cracking</option><option value="custom">Custom</option></select><small>{{ modeDescriptions[form.mode] }}</small></div>
+        <div class="form-group form-span-4"><label>Concurrency</label><input v-model.number="form.concurrency" type="number" min="1" max="500" /></div>
+        <div class="form-group form-span-4"><label>Rate limit (QPS)</label><input v-model.number="form.rate_limit" type="number" min="0" /></div>
+        <div class="form-group form-span-4"><label>Callback timeout (minutes)</label><input v-model.number="form.callback_timeout_minutes" type="number" min="1" /></div>
+        <div class="form-group form-span-4"><label>Default origin</label><input v-model="form.default_origin" placeholder="https://example.com" /></div>
+        <div class="form-group form-span-4"><label>Default referer</label><input v-model="form.default_referer" placeholder="https://example.com/" /></div>
+        <div class="form-group form-span-6"><label>Proxy</label><input v-model="form.proxy" placeholder="http://127.0.0.1:8080 or socks5://127.0.0.1:1080" /></div>
+        <div class="form-group form-span-6"><label>Custom headers</label><textarea v-model="form.custom_headers" rows="3" placeholder='{"Cookie":"session=abc","Authorization":"Bearer token"}'></textarea></div>
+        <div class="form-actions form-span-12"><button class="ghost-button" @click="showForm = false">Collapse</button><button class="primary" :disabled="submitting" @click="startScan">{{ submitting ? 'Starting...' : 'Start scan' }}</button></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Scan queue</h2>
+          <p>Each row tracks request dispatch, callback hits, and the current lifecycle state.</p>
+        </div>
+      </div>
+
       <div class="table-shell" v-if="app.scans.length">
         <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Status</th>
-              <th>Mode</th>
-              <th>Targets</th>
-              <th>Sent</th>
-              <th>Pingbacks</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
+          <thead><tr><th>ID</th><th>Status</th><th>Mode</th><th>Targets</th><th>Requests</th><th>Pingbacks</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody>
             <tr v-for="scan in app.scans" :key="scan.id">
-              <td class="mono" :data-tooltip="scan.id">{{ shortId(scan.id) }}</td>
+              <td class="mono">{{ shortId(scan.id) }}</td>
               <td><span :class="statusClass(scan.status)">{{ scan.status }}</span></td>
               <td>{{ scan.mode }}</td>
               <td>{{ scan.target_count }}</td>
-              <td>
-                {{ scan.request_sent }}
-                <template v-if="progressPercent(scan) !== null">
-                  <div class="scan-progress">
-                    <div class="progress-bar" :style="{ width: progressPercent(scan) + '%' }"></div>
-                  </div>
-                </template>
-              </td>
-              <td>
-                <span v-if="scan.pingback_count" class="badge badge-high">{{ scan.pingback_count }}</span>
-                <span v-else class="muted">0</span>
-              </td>
+              <td><div class="mono">{{ scan.request_sent }}</div><div v-if="progressPercent(scan) !== null" class="scan-progress"><div class="progress-bar" :style="{ width: progressPercent(scan) + '%' }"></div></div></td>
+              <td><span v-if="scan.pingback_count" class="badge badge-high">{{ scan.pingback_count }}</span><span v-else class="muted">0</span></td>
               <td class="mono">{{ formatTime(scan.created_at) }}</td>
-              <td>
-                <div class="action-row">
-                  <button class="icon-button" data-tooltip="View results" @click="viewResults(scan.id)">📋</button>
-                  <button
-                    v-if="scan.status === 'running' || scan.status === 'waiting_callback'"
-                    class="icon-button" data-tooltip="Stop scan"
-                    @click="stopScan(scan.id)"
-                  >⏹</button>
-                  <button
-                    v-if="confirmDelete === scan.id"
-                    class="btn-danger btn-sm" @click="deleteScan(scan.id)"
-                  >Confirm?</button>
-                  <button
-                    v-else class="icon-button" data-tooltip="Delete scan"
-                    @click="confirmDelete = scan.id"
-                  >🗑</button>
-                </div>
-              </td>
+              <td><div class="action-row"><button class="icon-button" @click="viewResults(scan.id)">Open</button><button v-if="scan.status === 'running' || scan.status === 'waiting_callback'" class="icon-button" @click="stopScan(scan.id)">Stop</button><button v-if="confirmDelete === scan.id" class="btn-danger" @click="deleteScan(scan.id)">Confirm delete</button><button v-else class="icon-button" @click="confirmDelete = scan.id">Delete</button></div></td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div class="empty-state" v-else>
-        No scan tasks yet. Click "New Scan" to start.
-      </div>
-    </div>
+      <div v-else class="empty-state"><strong>No scan jobs yet.</strong><p class="muted">Use the planner above to queue the first scan.</p></div>
+    </section>
   </div>
 </template>
-
-<style scoped>
-.scans-page {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-.action-bar {
-  display: flex;
-  gap: 10px;
-}
-.scan-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.scan-form h2 {
-  margin-bottom: 0;
-}
-</style>

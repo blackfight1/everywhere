@@ -244,6 +244,7 @@ func (e *Engine) dispatch(
 	}
 
 	standardPayloads := filterPayloadsByType(items, payload.TypeHeader, payload.TypeParam)
+	standardPayloads, hostPayloads := splitHostPayloads(standardPayloads)
 	rawPayloads := filterPayloadsByType(items, payload.TypeRaw)
 
 enqueueLoop:
@@ -253,6 +254,15 @@ enqueueLoop:
 			select {
 			case jobs <- func() error {
 				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, standardPayloads, totalRequests)
+			}:
+			case <-ctx.Done():
+				break enqueueLoop
+			}
+		}
+		if len(hostPayloads) > 0 {
+			select {
+			case jobs <- func() error {
+				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, hostPayloads, totalRequests)
 			}:
 			case <-ctx.Done():
 				break enqueueLoop
@@ -273,15 +283,23 @@ enqueueLoop:
 
 		for _, altTarget := range buildAltTargets(target, req.AltPorts) {
 			altTarget := altTarget
-			if len(standardPayloads) == 0 {
-				continue
+			if len(standardPayloads) > 0 {
+				select {
+				case jobs <- func() error {
+					return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads, totalRequests)
+				}:
+				case <-ctx.Done():
+					break enqueueLoop
+				}
 			}
-			select {
-			case jobs <- func() error {
-				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads, totalRequests)
-			}:
-			case <-ctx.Done():
-				break enqueueLoop
+			if len(hostPayloads) > 0 {
+				select {
+				case jobs <- func() error {
+					return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, hostPayloads, totalRequests)
+				}:
+				case <-ctx.Done():
+					break enqueueLoop
+				}
 			}
 		}
 	}
@@ -449,7 +467,11 @@ func (e *Engine) handleInteraction(
 
 	if !ok {
 		var sent database.SentPayload
-		if err := e.db.First(&sent, "unique_id = ?", interaction.UniqueID).Error; err != nil {
+		tx := e.db.Limit(1).Find(&sent, "unique_id = ?", interaction.UniqueID)
+		if tx.Error != nil {
+			return
+		}
+		if tx.RowsAffected == 0 {
 			return
 		}
 		entry = oob.CorrelationEntry{
@@ -462,7 +484,11 @@ func (e *Engine) handleInteraction(
 		}
 	} else if strings.TrimSpace(entry.PayloadVal) == "" {
 		var sent database.SentPayload
-		if err := e.db.First(&sent, "unique_id = ?", interaction.UniqueID).Error; err != nil {
+		tx := e.db.Limit(1).Find(&sent, "unique_id = ?", interaction.UniqueID)
+		if tx.Error != nil {
+			return
+		}
+		if tx.RowsAffected == 0 {
 			return
 		}
 		entry.PayloadVal = sent.PayloadValue
@@ -685,6 +711,19 @@ func filterPayloadsByType(items []payload.Payload, kinds ...payload.Type) []payl
 	return filtered
 }
 
+func splitHostPayloads(items []payload.Payload) ([]payload.Payload, []payload.Payload) {
+	standard := make([]payload.Payload, 0, len(items))
+	host := make([]payload.Payload, 0, len(items))
+	for _, item := range items {
+		if item.Type == payload.TypeHeader && strings.EqualFold(item.Key, "Host") {
+			host = append(host, item)
+			continue
+		}
+		standard = append(standard, item)
+	}
+	return standard, host
+}
+
 func filterTargets(targets []string, scope ScopeFilter) []string {
 	var filtered []string
 	for _, target := range targets {
@@ -754,10 +793,15 @@ func estimateTotalRequests(req StartScanRequest, items []payload.Payload) int {
 	}
 
 	standardCount := 0
+	hostCount := 0
 	rawCount := 0
 	for _, item := range items {
 		switch item.Type {
 		case payload.TypeHeader, payload.TypeParam:
+			if item.Type == payload.TypeHeader && strings.EqualFold(item.Key, "Host") {
+				hostCount = 1
+				continue
+			}
 			standardCount = 1
 		case payload.TypeRaw:
 			if item.Key != "alt-ports" {
@@ -766,11 +810,11 @@ func estimateTotalRequests(req StartScanRequest, items []payload.Payload) int {
 		}
 	}
 
-	perTarget := standardCount + rawCount
-	if standardCount > 0 && len(req.AltPorts) > 0 {
+	perTarget := standardCount + hostCount + rawCount
+	if len(req.AltPorts) > 0 {
 		for _, port := range req.AltPorts {
 			if port > 0 {
-				perTarget++
+				perTarget += standardCount + hostCount
 			}
 		}
 	}

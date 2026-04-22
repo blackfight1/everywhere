@@ -107,12 +107,12 @@ payloads:
     value: "for=spoofed.%s;by=spoofed.%s;host=spoofed.%s"
     group: standard
     comment: "RFC 7239 forwarded header"
-  - active: false
+  - active: true
     type: header
     key: Host
-    value: "%h:%s"
+    value: "%s"
     group: standard
-    comment: "Host header variant"
+    comment: "Host override callback"
   - active: false
     type: header
     key: Origin
