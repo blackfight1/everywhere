@@ -37,17 +37,18 @@ export const useWebSocketStore = defineStore('websocket', () => {
         ws.onmessage = (event) => {
             try {
                 const msg = JSON.parse(event.data);
+                const scanID = msg.scan_id || msg.task_id;
                 listeners.forEach(fn => fn(msg));
 
                 if (msg.type === 'scan_progress') {
-                    addLog('debug', `Scan ${msg.scan_id}: ${msg.sent}/${msg.total} requests sent`, { scan_id: msg.scan_id });
+                    addLog('debug', `Scan ${scanID}: ${msg.sent}/${msg.total} requests sent`, { scan_id: scanID });
                 } else if (msg.type === 'new_pingback' || msg.type === 'pingback') {
                     const pb = msg.data || {};
                     addLog('warn', `Pingback [${pb.callback_protocol}] from ${pb.target_url} via ${pb.payload_key} (${pb.severity})`, { scan_id: pb.scan_task_id });
                 } else if (msg.type === 'scan_status' || msg.type === 'task_status') {
-                    addLog('info', `Scan ${msg.scan_id || ''} status: ${msg.status || 'updated'}`, { scan_id: msg.scan_id });
-                } else if (msg.type === 'log') {
-                    addLog(msg.level || 'debug', msg.message || JSON.stringify(msg), msg);
+                    addLog('info', `Scan ${scanID || ''} status: ${msg.status || 'updated'}`, { scan_id: scanID });
+                } else if (msg.type === 'log' || msg.type === 'scan_log') {
+                    addLog(msg.level || 'debug', msg.message || JSON.stringify(msg), { ...msg, scan_id: scanID });
                 } else if (msg.type === 'connected') {
                     addLog('info', 'Server confirmed connection');
                 }

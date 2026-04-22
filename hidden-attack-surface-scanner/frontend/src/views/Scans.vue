@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, computed, onMounted } from 'vue';
+import { reactive, ref, onMounted } from 'vue';
 import { api } from '../api/index.js';
 import { useAppStore } from '../stores/app.js';
 import { useToastStore } from '../stores/toast.js';
@@ -25,7 +25,19 @@ const form = reactive({
   custom_headers: '',
 });
 
-onMounted(() => { app.loadScans(); });
+function applySettingsDefaults() {
+  if (!app.settings?.scanner) return;
+  form.concurrency = app.settings.scanner.default_concurrency || 10;
+  form.rate_limit = app.settings.scanner.default_rate_limit || 20;
+  form.callback_timeout_minutes = app.settings.scanner.default_timeout_minutes || 1440;
+  form.default_origin = app.settings.scanner.default_origin || '';
+  form.default_referer = app.settings.scanner.default_referer || '';
+}
+
+onMounted(async () => {
+  await Promise.all([app.loadScans(), app.loadSettings()]);
+  applySettingsDefaults();
+});
 
 const modeDescriptions = {
   quick: 'Standard active headers only (~27 headers merged into 1 request per target)',

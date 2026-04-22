@@ -126,6 +126,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	e.broadcast(map[string]any{
 		"type":    "task_status",
 		"task_id": taskID,
+		"scan_id": taskID,
 		"status":  "running",
 	})
 
@@ -164,8 +165,10 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	}
 	e.broadcastLog(taskID, "info", fmt.Sprintf("Loaded %d payloads, dispatching to %d targets (concurrency=%d, rate_limit=%d)...",
 		len(items), len(req.Targets), req.Concurrency, req.RateLimit))
+	totalRequests := estimateTotalRequests(req, items)
+	e.broadcastProgress(taskID, 0, totalRequests)
 
-	if err := e.dispatch(ctx, taskID, req, client, httpClient, items); err != nil && !errors.Is(err, context.Canceled) {
+	if err := e.dispatch(ctx, taskID, req, client, httpClient, items, totalRequests); err != nil && !errors.Is(err, context.Canceled) {
 		e.failTask(taskID, err)
 		return
 	}
@@ -180,6 +183,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	e.broadcast(map[string]any{
 		"type":    "task_status",
 		"task_id": taskID,
+		"scan_id": taskID,
 		"status":  "waiting_callback",
 	})
 
@@ -201,6 +205,7 @@ func (e *Engine) dispatch(
 	client *oob.Client,
 	httpClient *http.Client,
 	items []payload.Payload,
+	totalRequests int,
 ) error {
 	limiter := rate.NewLimiter(rate.Inf, 1)
 	if req.RateLimit > 0 {
@@ -247,7 +252,7 @@ enqueueLoop:
 		if len(standardPayloads) > 0 {
 			select {
 			case jobs <- func() error {
-				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, standardPayloads)
+				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, standardPayloads, totalRequests)
 			}:
 			case <-ctx.Done():
 				break enqueueLoop
@@ -260,7 +265,7 @@ enqueueLoop:
 			}
 			rawPayload := rawPayload
 			select {
-			case jobs <- func() error { return e.sendRawTarget(ctx, taskID, req, client, target, rawPayload) }:
+			case jobs <- func() error { return e.sendRawTarget(ctx, taskID, req, client, target, rawPayload, totalRequests) }:
 			case <-ctx.Done():
 				break enqueueLoop
 			}
@@ -273,7 +278,7 @@ enqueueLoop:
 			}
 			select {
 			case jobs <- func() error {
-				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads)
+				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads, totalRequests)
 			}:
 			case <-ctx.Done():
 				break enqueueLoop
@@ -300,6 +305,7 @@ func (e *Engine) sendStandardTarget(
 	httpClient *http.Client,
 	target string,
 	items []payload.Payload,
+	totalRequests int,
 ) error {
 	e.broadcastLog(taskID, "debug", fmt.Sprintf("Scanning target: %s (%d payloads)", target, len(items)))
 	parsed, err := url.Parse(target)
@@ -361,11 +367,11 @@ func (e *Engine) sendStandardTarget(
 	statusCode, err := SendStandardRequest(ctx, httpClient, target, resolved, req.CustomHeaders)
 	if err != nil {
 		log.Printf("send standard request failed target=%s err=%v", target, err)
-		e.incrementRequestCount(taskID)
+		e.incrementRequestCount(taskID, totalRequests)
 		return nil
 	}
 
-	e.incrementRequestCount(taskID)
+	e.incrementRequestCount(taskID, totalRequests)
 	if len(uniqueIDs) > 0 {
 		e.db.Model(&database.SentPayload{}).Where("unique_id IN ?", uniqueIDs).Update("response_status", statusCode)
 	}
@@ -379,6 +385,7 @@ func (e *Engine) sendRawTarget(
 	client *oob.Client,
 	target string,
 	item payload.Payload,
+	totalRequests int,
 ) error {
 	entry := oob.CorrelationEntry{
 		ScanTaskID:  taskID,
@@ -412,7 +419,7 @@ func (e *Engine) sendRawTarget(
 	}
 
 	statusCode, err := SendRawRequest(ctx, rawRequest, 15*time.Second)
-	e.incrementRequestCount(taskID)
+	e.incrementRequestCount(taskID, totalRequests)
 	if err != nil {
 		return nil
 	}
@@ -547,8 +554,14 @@ func (e *Engine) pingbackExists(uniqueID string) (bool, error) {
 	return count > 0, nil
 }
 
-func (e *Engine) incrementRequestCount(taskID string) {
+func (e *Engine) incrementRequestCount(taskID string, total int) {
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).UpdateColumn("request_sent", gorm.Expr("request_sent + 1"))
+
+	var task database.ScanTask
+	if err := e.db.Select("request_sent").First(&task, "id = ?", taskID).Error; err != nil {
+		return
+	}
+	e.broadcastProgress(taskID, task.RequestSent, total)
 }
 
 func (e *Engine) finishTask(taskID string, status string) {
@@ -560,6 +573,7 @@ func (e *Engine) finishTask(taskID string, status string) {
 	e.broadcast(map[string]any{
 		"type":    "task_status",
 		"task_id": taskID,
+		"scan_id": taskID,
 		"status":  status,
 	})
 }
@@ -573,6 +587,7 @@ func (e *Engine) failTask(taskID string, err error) {
 	e.broadcast(map[string]any{
 		"type":    "task_status",
 		"task_id": taskID,
+		"scan_id": taskID,
 		"status":  "failed",
 		"error":   err.Error(),
 	})
@@ -595,9 +610,20 @@ func (e *Engine) broadcastLog(taskID string, level string, message string) {
 	e.broadcast(map[string]any{
 		"type":    "scan_log",
 		"task_id": taskID,
+		"scan_id": taskID,
 		"level":   level,
 		"message": message,
 		"time":    time.Now().UTC(),
+	})
+}
+
+func (e *Engine) broadcastProgress(taskID string, sent int, total int) {
+	e.broadcast(map[string]any{
+		"type":    "scan_progress",
+		"task_id": taskID,
+		"scan_id": taskID,
+		"sent":    sent,
+		"total":   total,
 	})
 }
 
@@ -720,6 +746,35 @@ func buildAltTargets(target string, ports []int) []string {
 		results = append(results, cloned.String())
 	}
 	return results
+}
+
+func estimateTotalRequests(req StartScanRequest, items []payload.Payload) int {
+	if len(req.Targets) == 0 || len(items) == 0 {
+		return 0
+	}
+
+	standardCount := 0
+	rawCount := 0
+	for _, item := range items {
+		switch item.Type {
+		case payload.TypeHeader, payload.TypeParam:
+			standardCount = 1
+		case payload.TypeRaw:
+			if item.Key != "alt-ports" {
+				rawCount++
+			}
+		}
+	}
+
+	perTarget := standardCount + rawCount
+	if standardCount > 0 && len(req.AltPorts) > 0 {
+		for _, port := range req.AltPorts {
+			if port > 0 {
+				perTarget++
+			}
+		}
+	}
+	return len(req.Targets) * perTarget
 }
 
 func firstLabel(value string) string {

@@ -45,6 +45,8 @@ export const useAppStore = defineStore('app', () => {
     }
 
     function handleWsMessage(msg) {
+        const scanID = msg.scan_id || msg.task_id;
+
         if (msg.type === 'pingback' || msg.type === 'new_pingback') {
             if (msg.data) {
                 pingbacks.value.unshift(msg.data);
@@ -60,7 +62,7 @@ export const useAppStore = defineStore('app', () => {
             loadStats();
         }
         if (msg.type === 'scan_progress') {
-            const scan = scans.value.find(s => s.id === msg.scan_id);
+            const scan = scans.value.find(s => s.id === scanID);
             if (scan) {
                 scan.request_sent = msg.sent;
                 scan._total = msg.total;

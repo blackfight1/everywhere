@@ -67,9 +67,7 @@ func (s *Server) updateSettings(c *gin.Context) {
 		return
 	}
 
-	if input.Interactsh.ServerURL != "" || input.Interactsh.Token != "" {
-		s.cfg.Interactsh = input.Interactsh
-	}
+	s.cfg.Interactsh = input.Interactsh
 	if input.Scanner.DefaultConcurrency > 0 {
 		s.cfg.Scanner = input.Scanner
 	}
