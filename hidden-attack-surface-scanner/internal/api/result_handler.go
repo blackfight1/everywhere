@@ -10,7 +10,6 @@ import (
 )
 
 func (s *Server) listPingbacks(c *gin.Context) {
-	var rows []database.Pingback
 	query := s.db.Order("received_at desc")
 
 	if severity := c.Query("severity"); severity != "" {
@@ -23,7 +22,8 @@ func (s *Server) listPingbacks(c *gin.Context) {
 		query = query.Where("scan_task_id = ?", taskID)
 	}
 
-	if err := query.Find(&rows).Error; err != nil {
+	rows, err := s.buildPingbackEvidence(query)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -31,12 +31,16 @@ func (s *Server) listPingbacks(c *gin.Context) {
 }
 
 func (s *Server) getPingback(c *gin.Context) {
-	var row database.Pingback
-	if err := s.db.First(&row, "id = ?", c.Param("id")).Error; err != nil {
+	rows, err := s.buildPingbackEvidence(s.db.Where("id = ?", c.Param("id")).Limit(1))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(rows) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "pingback not found"})
 		return
 	}
-	c.JSON(http.StatusOK, row)
+	c.JSON(http.StatusOK, rows[0])
 }
 
 func (s *Server) getStats(c *gin.Context) {

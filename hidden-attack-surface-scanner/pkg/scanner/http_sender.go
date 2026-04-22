@@ -53,16 +53,15 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 	}, nil
 }
 
-func SendStandardRequest(
+func BuildStandardRequest(
 	ctx context.Context,
-	httpClient *http.Client,
 	target string,
 	payloads []payload.ResolvedPayload,
 	customHeaders map[string]string,
-) (int, error) {
+) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	req.Header.Set("Cache-Control", "no-transform")
@@ -84,6 +83,10 @@ func SendStandardRequest(
 		}
 	}
 
+	return req, nil
+}
+
+func SendPreparedRequest(httpClient *http.Client, req *http.Request) (int, error) {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err

@@ -55,6 +55,10 @@ type SentPayload struct {
 	PayloadType    string    `json:"payload_type"`
 	PayloadKey     string    `json:"payload_key"`
 	PayloadValue   string    `json:"payload_value" gorm:"type:text"`
+	RequestMethod  string    `json:"request_method"`
+	RequestURL     string    `json:"request_url" gorm:"type:text"`
+	RawRequest     string    `json:"raw_request" gorm:"type:text"`
+	ReplayCommand  string    `json:"replay_command" gorm:"type:text"`
 	ResponseStatus *int      `json:"response_status"`
 	SentAt         time.Time `json:"sent_at" gorm:"index"`
 }

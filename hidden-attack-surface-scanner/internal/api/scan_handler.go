@@ -53,9 +53,9 @@ func (s *Server) stopScan(c *gin.Context) {
 }
 
 func (s *Server) getScanResults(c *gin.Context) {
-	var rows []database.Pingback
 	query := s.db.Order("received_at desc").Where("scan_task_id = ?", c.Param("id"))
-	if err := query.Find(&rows).Error; err != nil {
+	rows, err := s.buildPingbackEvidence(query)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

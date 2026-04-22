@@ -395,11 +395,25 @@ func (e *Engine) sendStandardTarget(
 	if len(resolved) == 0 {
 		return nil
 	}
+	triggerReq, err := BuildStandardRequest(ctx, target, resolved, req.CustomHeaders)
+	if err != nil {
+		return err
+	}
+	snapshot, err := CaptureRequestSnapshot(triggerReq)
+	if err != nil {
+		return err
+	}
+	for idx := range sentRows {
+		sentRows[idx].RequestMethod = snapshot.Method
+		sentRows[idx].RequestURL = snapshot.URL
+		sentRows[idx].RawRequest = snapshot.RawRequest
+		sentRows[idx].ReplayCommand = snapshot.ReplayCommand
+	}
 	if err := e.db.Create(&sentRows).Error; err != nil {
 		return err
 	}
 
-	statusCode, err := SendStandardRequest(ctx, httpClient, target, resolved, req.CustomHeaders)
+	statusCode, err := SendPreparedRequest(httpClient, triggerReq)
 	if err != nil {
 		log.Printf("send standard request failed target=%s err=%v", target, err)
 		e.incrementRequestCount(taskID, totalRequests)
@@ -440,14 +454,19 @@ func (e *Engine) sendRawTarget(
 	uniqueID := firstLabel(oobURL)
 	entry.PayloadVal = string(rawRequest.RawBytes)
 	client.Store(uniqueID, entry)
+	snapshot := BuildRawRequestSnapshot(target, rawRequest)
 	sent := database.SentPayload{
-		UniqueID:     uniqueID,
-		ScanTaskID:   taskID,
-		TargetURL:    target,
-		PayloadType:  string(item.Type),
-		PayloadKey:   item.Key,
-		PayloadValue: string(rawRequest.RawBytes),
-		SentAt:       entry.SentAt,
+		UniqueID:      uniqueID,
+		ScanTaskID:    taskID,
+		TargetURL:     target,
+		PayloadType:   string(item.Type),
+		PayloadKey:    item.Key,
+		PayloadValue:  string(rawRequest.RawBytes),
+		RequestMethod: snapshot.Method,
+		RequestURL:    snapshot.URL,
+		RawRequest:    snapshot.RawRequest,
+		ReplayCommand: snapshot.ReplayCommand,
+		SentAt:        entry.SentAt,
 	}
 	if err := e.db.Create(&sent).Error; err != nil {
 		return err
