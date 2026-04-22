@@ -11,6 +11,14 @@ const selection = ref(new Set());
 const importInput = ref(null);
 const saving = ref(false);
 const filters = ref({ search: '', type: 'all', group: 'all', status: 'all' });
+const quickRawKeys = new Set([
+  'absolute-url-host-mismatch',
+  'duplicate-host',
+  'sni-host-mismatch',
+  'sni-host-mismatch-reversed',
+  'host-at-reversed',
+  'host-with-at',
+]);
 
 onMounted(async () => { await app.loadPayloads(); resetDrafts(); });
 function resetDrafts() { drafts.value = app.payloads.map((p) => ({ ...p, _key: p.id || tmpId() })); selection.value = new Set(); }
@@ -42,7 +50,20 @@ function removeSelected() { if (!selection.value.size) return; drafts.value = dr
 function toggleAll() { const next = new Set(selection.value); const keys = filtered.value.map(rowKey); const full = keys.every((key) => next.has(key)); keys.forEach((key) => full ? next.delete(key) : next.add(key)); selection.value = next; }
 function toggleSel(item) { const next = new Set(selection.value); const key = rowKey(item); next.has(key) ? next.delete(key) : next.add(key); selection.value = next; }
 function moveItem(item, direction) { const index = drafts.value.findIndex((row) => rowKey(row) === rowKey(item)); const target = index + direction; if (target < 0 || target >= drafts.value.length) return; const copy = [...drafts.value]; [copy[index], copy[target]] = [copy[target], copy[index]]; drafts.value = copy; }
-function setModePreset(mode) { drafts.value.forEach((item) => { if (mode === 'quick') item.active = item.group === 'standard' && item.type === 'header'; else if (mode === 'full') item.active = item.group === 'standard'; else if (mode === 'cracking') item.active = true; else if (mode === 'none') item.active = false; }); }
+function setModePreset(mode) {
+  drafts.value.forEach((item) => {
+    const key = String(item.key || '').trim().toLowerCase();
+    if (mode === 'quick') {
+      item.active =
+        (item.group === 'standard' && item.type === 'header') ||
+        (item.group === 'cracking_the_lens' && item.type === 'raw' && quickRawKeys.has(key));
+    } else if (mode === 'full') {
+      item.active = true;
+    } else if (mode === 'none') {
+      item.active = false;
+    }
+  });
+}
 function enableGroup(group, active) { drafts.value.forEach((item) => { if (item.group === group) item.active = active; }); }
 async function save() {
   saving.value = true;
@@ -64,7 +85,7 @@ function doExport() { api.exportPayloads(); }
       <div class="panel-header">
         <div>
           <h2>Payload workspace</h2>
-          <p>Edit the active payload set, apply mode presets, and keep standard headers separate from raw request variants.</p>
+          <p>Edit the active payload set and apply the same Quick and Full presets used by the scan planner.</p>
         </div>
         <div class="action-row">
           <button class="ghost-button" @click="addRow">Add row</button>
@@ -81,10 +102,14 @@ function doExport() { api.exportPayloads(); }
       <div class="tag-row" style="margin-bottom: 14px">
         <button class="btn-sm" @click="setModePreset('quick')">Preset quick</button>
         <button class="btn-sm" @click="setModePreset('full')">Preset full</button>
-        <button class="btn-sm" @click="setModePreset('cracking')">Preset cracking</button>
         <button class="btn-sm" @click="setModePreset('none')">Disable all</button>
         <button v-for="group in groups" :key="group + '-on'" class="btn-sm" @click="enableGroup(group, true)">{{ group }} on</button>
         <button v-for="group in groups" :key="group + '-off'" class="btn-sm" @click="enableGroup(group, false)">{{ group }} off</button>
+      </div>
+
+      <div class="hint-strip" style="margin-bottom: 14px">
+        <span><code>Preset quick</code> standard headers + dedicated <code>Host</code> + 6 raw variants</span>
+        <span><code>Preset full</code> enables every payload row</span>
       </div>
 
       <div class="stats-row">

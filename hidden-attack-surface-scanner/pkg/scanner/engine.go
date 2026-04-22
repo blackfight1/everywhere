@@ -29,6 +29,20 @@ type Broadcaster interface {
 	Broadcast(any)
 }
 
+const (
+	scanModeQuick = "quick"
+	scanModeFull  = "full"
+)
+
+var quickRawPayloadKeys = map[string]struct{}{
+	"absolute-url-host-mismatch": {},
+	"duplicate-host":             {},
+	"sni-host-mismatch":          {},
+	"sni-host-mismatch-reversed": {},
+	"host-at-reversed":           {},
+	"host-with-at":               {},
+}
+
 type StartScanRequest struct {
 	Targets                []string          `json:"targets"`
 	Mode                   string            `json:"mode"`
@@ -69,6 +83,9 @@ func NewEngine(db *gorm.DB, cfg appconfig.Config, broadcaster Broadcaster) *Engi
 
 func (e *Engine) StartScan(req StartScanRequest) (*database.ScanTask, error) {
 	req.applyDefaults(e.cfg)
+	if !isSupportedScanMode(req.Mode) {
+		return nil, fmt.Errorf("unsupported scan mode: %s", req.Mode)
+	}
 	if len(req.Targets) == 0 {
 		return nil, errors.New("targets cannot be empty")
 	}
@@ -550,26 +567,9 @@ func (e *Engine) loadPayloads(mode string) ([]payload.Payload, error) {
 			Group:   row.Group,
 			Comment: row.Comment,
 		}
-		switch strings.ToLower(mode) {
-		case "quick":
-			if item.Group == "standard" && item.Active && item.Type == payload.TypeHeader {
-				items = append(items, item)
-			}
-		case "full":
-			if item.Group == "standard" && item.Active {
-				items = append(items, item)
-			}
-		case "cracking":
-			if (item.Group == "standard" || item.Group == "cracking_the_lens") && item.Active {
-				items = append(items, item)
-			}
-		default:
-			if item.Active {
-				items = append(items, item)
-			}
-		}
+		items = append(items, item)
 	}
-	return items, nil
+	return selectPayloadsForMode(items, mode), nil
 }
 
 func (e *Engine) pingbackExists(uniqueID string) (bool, error) {
@@ -654,8 +654,9 @@ func (e *Engine) broadcastProgress(taskID string, sent int, total int) {
 }
 
 func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
+	r.Mode = normalizeScanMode(r.Mode)
 	if r.Mode == "" {
-		r.Mode = "quick"
+		r.Mode = scanModeQuick
 	}
 	if r.Concurrency <= 0 {
 		r.Concurrency = cfg.Scanner.DefaultConcurrency
@@ -684,6 +685,50 @@ func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
 	if r.CustomHeaders == nil {
 		r.CustomHeaders = map[string]string{}
 	}
+}
+
+func normalizeScanMode(mode string) string {
+	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func isSupportedScanMode(mode string) bool {
+	switch normalizeScanMode(mode) {
+	case scanModeQuick, scanModeFull:
+		return true
+	default:
+		return false
+	}
+}
+
+func selectPayloadsForMode(items []payload.Payload, mode string) []payload.Payload {
+	selected := make([]payload.Payload, 0, len(items))
+	switch normalizeScanMode(mode) {
+	case scanModeQuick:
+		for _, item := range items {
+			if !item.Active {
+				continue
+			}
+			if item.Group == "standard" && item.Type == payload.TypeHeader {
+				selected = append(selected, item)
+				continue
+			}
+			if item.Group == "cracking_the_lens" && item.Type == payload.TypeRaw && isQuickRawPayload(item.Key) {
+				selected = append(selected, item)
+			}
+		}
+	case scanModeFull:
+		for _, item := range items {
+			if item.Active {
+				selected = append(selected, item)
+			}
+		}
+	}
+	return selected
+}
+
+func isQuickRawPayload(key string) bool {
+	_, ok := quickRawPayloadKeys[strings.ToLower(strings.TrimSpace(key))]
+	return ok
 }
 
 func canResolvePayload(item payload.Payload, opts payload.ResolveOptions) bool {

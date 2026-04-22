@@ -39,10 +39,8 @@ onMounted(async () => {
 });
 
 const modeDescriptions = {
-  quick: '1 merged default request + 1 dedicated Host override request per target.',
-  full: 'All active standard payloads, while Host remains isolated in its own request.',
-  cracking: 'Full mode plus any enabled raw Cracking the Lens variants.',
-  custom: 'Use only the payloads currently enabled in the Payloads workspace.',
+  quick: 'Active standard headers, one dedicated Host request, and six high-value Cracking the Lens raw variants.',
+  full: 'Every enabled payload in the Payload workspace, including params, raw variants, and alternate-port repeats.',
 };
 
 const queueStats = computed(() => ({
@@ -112,7 +110,7 @@ function shortId(id) { return id?.substring(0, 8) || '-'; }
       <div class="panel-header">
         <div>
           <h2>Scan planner</h2>
-          <p>Define targets, dispatch mode, and callback window before the backend starts sending requests.</p>
+          <p>Define targets, choose a scan type, and set the callback window before the backend starts sending requests.</p>
         </div>
         <div class="inline-actions">
           <button class="ghost-button" @click="showForm = !showForm">{{ showForm ? 'Hide form' : 'Show form' }}</button>
@@ -127,12 +125,17 @@ function shortId(id) { return id?.substring(0, 8) || '-'; }
         <div class="stat-block"><span>Jobs with hits</span><strong>{{ queueStats.hits }}</strong></div>
       </div>
 
+      <div class="hint-strip" style="margin-top: 18px">
+        <span><code>Quick</code> standard headers + dedicated <code>Host</code> + 6 raw variants</span>
+        <span><code>Full</code> every enabled payload from the Payload workspace</span>
+      </div>
+
       <div v-if="showForm" class="form-grid" style="margin-top: 18px">
         <div class="form-group form-span-12">
           <label>Targets</label>
           <textarea v-model="form.targets" rows="7" placeholder="https://app.example.com&#10;https://api.example.com&#10;https://admin.example.com"></textarea>
         </div>
-        <div class="form-group form-span-4"><label>Mode</label><select v-model="form.mode"><option value="quick">Quick</option><option value="full">Full</option><option value="cracking">Cracking</option><option value="custom">Custom</option></select><small>{{ modeDescriptions[form.mode] }}</small></div>
+        <div class="form-group form-span-4"><label>Scan type</label><select v-model="form.mode"><option value="quick">Quick</option><option value="full">Full</option></select><small>{{ modeDescriptions[form.mode] }}</small></div>
         <div class="form-group form-span-4"><label>Concurrency</label><input v-model.number="form.concurrency" type="number" min="1" max="500" /></div>
         <div class="form-group form-span-4"><label>Rate limit (QPS)</label><input v-model.number="form.rate_limit" type="number" min="0" /></div>
         <div class="form-group form-span-4"><label>Callback timeout (minutes)</label><input v-model.number="form.callback_timeout_minutes" type="number" min="1" /></div>
