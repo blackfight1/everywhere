@@ -64,7 +64,7 @@ func Default() Config {
 		Scanner: ScannerConfig{
 			DefaultConcurrency:   10,
 			DefaultRateLimit:     20,
-			DefaultTimeoutMinute: 30,
+			DefaultTimeoutMinute: 1440,
 		},
 		OwnIP: OwnIPConfig{
 			Action: "mark",

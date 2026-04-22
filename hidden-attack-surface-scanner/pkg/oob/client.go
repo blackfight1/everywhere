@@ -2,6 +2,7 @@ package oob
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -89,6 +90,7 @@ func (c *Client) DetectOwnIP(httpClient *http.Client) error {
 	if err != nil {
 		return err
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.Body.Close()
 }
 

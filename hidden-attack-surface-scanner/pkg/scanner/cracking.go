@@ -125,6 +125,9 @@ func BuildCrackingRequest(targetURL string, item payload.Payload, oobURL string)
 			)),
 		}, nil
 	case "sni-host-mismatch":
+		if !useTLS {
+			return RawRequest{}, fmt.Errorf("sni-host-mismatch requires HTTPS target")
+		}
 		return RawRequest{
 			Address: address,
 			UseTLS:  useTLS,
@@ -135,6 +138,9 @@ func BuildCrackingRequest(targetURL string, item payload.Payload, oobURL string)
 			)),
 		}, nil
 	case "sni-host-mismatch-reversed":
+		if !useTLS {
+			return RawRequest{}, fmt.Errorf("sni-host-mismatch-reversed requires HTTPS target")
+		}
 		return RawRequest{
 			Address: address,
 			UseTLS:  useTLS,

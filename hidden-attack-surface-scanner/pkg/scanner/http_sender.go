@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,7 +83,10 @@ func SendStandardRequest(
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	return resp.StatusCode, nil
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -34,9 +35,13 @@ func (h *Hub) Broadcast(value any) {
 		return
 	}
 
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for conn := range h.clients {
-		_ = conn.WriteMessage(websocket.TextMessage, data)
+		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			conn.Close()
+			delete(h.clients, conn)
+		}
 	}
 }

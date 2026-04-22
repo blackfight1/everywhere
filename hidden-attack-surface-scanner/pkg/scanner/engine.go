@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -135,12 +136,14 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	}
 	defer client.Stop()
 
+	e.broadcastLog(taskID, "info", "Initializing HTTP client...")
 	httpClient, err := NewHTTPClient(req.Proxy, 15*time.Second)
 	if err != nil {
 		e.failTask(taskID, err)
 		return
 	}
 
+	e.broadcastLog(taskID, "info", "Starting OOB interaction polling (interval=5s)...")
 	if err := client.StartPolling(5*time.Second, func(interaction *server.Interaction, entry oob.CorrelationEntry, ok bool) {
 		e.handleInteraction(taskID, client, interaction, entry, ok)
 	}); err != nil {
@@ -148,13 +151,19 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 		return
 	}
 
-	_ = client.DetectOwnIP(httpClient)
+	e.broadcastLog(taskID, "info", "Detecting own IP via interactsh...")
+	if err := client.DetectOwnIP(httpClient); err != nil {
+		e.broadcastLog(taskID, "warn", fmt.Sprintf("Own-IP detection failed (callbacks from own IP will not be filtered): %v", err))
+	}
 
+	e.broadcastLog(taskID, "info", fmt.Sprintf("Loading payloads for mode=%s...", req.Mode))
 	items, err := e.loadPayloads(req.Mode)
 	if err != nil {
 		e.failTask(taskID, err)
 		return
 	}
+	e.broadcastLog(taskID, "info", fmt.Sprintf("Loaded %d payloads, dispatching to %d targets (concurrency=%d, rate_limit=%d)...",
+		len(items), len(req.Targets), req.Concurrency, req.RateLimit))
 
 	if err := e.dispatch(ctx, taskID, req, client, httpClient, items); err != nil && !errors.Is(err, context.Canceled) {
 		e.failTask(taskID, err)
@@ -166,6 +175,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 		return
 	}
 
+	e.broadcastLog(taskID, "info", fmt.Sprintf("All requests dispatched. Waiting for OOB callbacks (timeout=%dm)...", req.CallbackTimeoutMinutes))
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{"status": "waiting_callback"})
 	e.broadcast(map[string]any{
 		"type":    "task_status",
@@ -291,6 +301,7 @@ func (e *Engine) sendStandardTarget(
 	target string,
 	items []payload.Payload,
 ) error {
+	e.broadcastLog(taskID, "debug", fmt.Sprintf("Scanning target: %s (%d payloads)", target, len(items)))
 	parsed, err := url.Parse(target)
 	if err != nil {
 		return err
@@ -349,6 +360,7 @@ func (e *Engine) sendStandardTarget(
 
 	statusCode, err := SendStandardRequest(ctx, httpClient, target, resolved, req.CustomHeaders)
 	if err != nil {
+		log.Printf("send standard request failed target=%s err=%v", target, err)
 		e.incrementRequestCount(taskID)
 		return nil
 	}
@@ -378,7 +390,9 @@ func (e *Engine) sendRawTarget(
 	oobURL := client.GeneratePayload(entry)
 	rawRequest, err := BuildCrackingRequest(target, item, oobURL)
 	if err != nil {
-		return err
+		client.Forget(firstLabel(oobURL))
+		log.Printf("skip raw payload %s for %s: %v", item.Key, target, err)
+		return nil
 	}
 
 	uniqueID := firstLabel(oobURL)
@@ -509,11 +523,11 @@ func (e *Engine) loadPayloads(mode string) ([]payload.Payload, error) {
 				items = append(items, item)
 			}
 		case "full":
-			if item.Group == "standard" {
+			if item.Group == "standard" && item.Active {
 				items = append(items, item)
 			}
 		case "cracking":
-			if item.Group == "standard" || item.Group == "cracking_the_lens" {
+			if (item.Group == "standard" || item.Group == "cracking_the_lens") && item.Active {
 				items = append(items, item)
 			}
 		default:
@@ -576,6 +590,17 @@ func (e *Engine) broadcast(message any) {
 	}
 }
 
+func (e *Engine) broadcastLog(taskID string, level string, message string) {
+	log.Printf("[%s] %s: %s", taskID[:8], level, message)
+	e.broadcast(map[string]any{
+		"type":    "scan_log",
+		"task_id": taskID,
+		"level":   level,
+		"message": message,
+		"time":    time.Now().UTC(),
+	})
+}
+
 func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
 	if r.Mode == "" {
 		r.Mode = "quick"
@@ -583,8 +608,8 @@ func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
 	if r.Concurrency <= 0 {
 		r.Concurrency = cfg.Scanner.DefaultConcurrency
 	}
-	if r.RateLimit < 0 {
-		r.RateLimit = 0
+	if r.RateLimit < -1 {
+		r.RateLimit = -1
 	}
 	if r.RateLimit == 0 {
 		r.RateLimit = cfg.Scanner.DefaultRateLimit
