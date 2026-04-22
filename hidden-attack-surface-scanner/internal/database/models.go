@@ -61,13 +61,13 @@ type SentPayload struct {
 
 type Pingback struct {
 	ID               string    `json:"id" gorm:"primaryKey;size:36"`
-	UniqueID         string    `json:"unique_id" gorm:"uniqueIndex"`
+	UniqueID         string    `json:"unique_id" gorm:"index;uniqueIndex:idx_pingbacks_uid_proto,priority:1"`
 	ScanTaskID       string    `json:"scan_task_id" gorm:"index"`
 	TargetURL        string    `json:"target_url"`
 	PayloadType      string    `json:"payload_type"`
 	PayloadKey       string    `json:"payload_key"`
 	PayloadValue     string    `json:"payload_value" gorm:"type:text"`
-	CallbackProtocol string    `json:"callback_protocol" gorm:"index"`
+	CallbackProtocol string    `json:"callback_protocol" gorm:"index;uniqueIndex:idx_pingbacks_uid_proto,priority:2"`
 	RemoteAddress    string    `json:"remote_address"`
 	ReverseDNS       string    `json:"reverse_dns"`
 	AsnInfo          string    `json:"asn_info" gorm:"type:text"`

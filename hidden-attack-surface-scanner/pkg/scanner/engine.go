@@ -472,7 +472,8 @@ func (e *Engine) handleInteraction(
 		return
 	}
 
-	if exists, _ := e.pingbackExists(interaction.UniqueID); exists {
+	protocol := strings.ToLower(strings.TrimSpace(interaction.Protocol))
+	if exists, _ := e.pingbackExists(interaction.UniqueID, protocol); exists {
 		return
 	}
 
@@ -526,7 +527,7 @@ func (e *Engine) handleInteraction(
 		PayloadType:      entry.PayloadType,
 		PayloadKey:       entry.PayloadKey,
 		PayloadValue:     coalesce(entry.PayloadVal, interaction.FullId),
-		CallbackProtocol: strings.ToLower(interaction.Protocol),
+		CallbackProtocol: protocol,
 		RemoteAddress:    remoteIP,
 		ReverseDNS:       reverseLookup(remoteIP),
 		AsnInfo:          mustJSON(interaction.AsnInfo),
@@ -572,9 +573,9 @@ func (e *Engine) loadPayloads(mode string) ([]payload.Payload, error) {
 	return selectPayloadsForMode(items, mode), nil
 }
 
-func (e *Engine) pingbackExists(uniqueID string) (bool, error) {
+func (e *Engine) pingbackExists(uniqueID string, protocol string) (bool, error) {
 	var count int64
-	if err := e.db.Model(&database.Pingback{}).Where("unique_id = ?", uniqueID).Count(&count).Error; err != nil {
+	if err := e.db.Model(&database.Pingback{}).Where("unique_id = ? AND callback_protocol = ?", uniqueID, protocol).Count(&count).Error; err != nil {
 		return false, err
 	}
 	return count > 0, nil

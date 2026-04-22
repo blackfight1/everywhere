@@ -21,7 +21,25 @@ func Open(cfg appconfig.Config) (*gorm.DB, error) {
 	if err := db.AutoMigrate(&ScanTask{}, &PayloadTemplate{}, &SentPayload{}, &Pingback{}); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if err := migratePingbackIndexes(db); err != nil {
+		return nil, fmt.Errorf("migrate pingback indexes: %w", err)
+	}
 	return db, nil
+}
+
+func migratePingbackIndexes(db *gorm.DB) error {
+	statements := []string{
+		`DROP INDEX IF EXISTS idx_pingbacks_unique_id`,
+		`DROP INDEX IF EXISTS pingbacks_unique_id_key`,
+		`ALTER TABLE pingbacks DROP CONSTRAINT IF EXISTS pingbacks_unique_id_key`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pingbacks_uid_proto ON pingbacks (unique_id, callback_protocol)`,
+	}
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func SeedPayloads(db *gorm.DB, items []payload.Payload) error {
