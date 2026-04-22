@@ -10,7 +10,7 @@ const drafts = ref([]);
 const selection = ref(new Set());
 const importInput = ref(null);
 const saving = ref(false);
-const filters = ref({ search: '', type: 'all', group: 'all', status: 'all' });
+const filters = ref({ search: '', status: 'all' });
 const quickRawKeys = new Set([
   'absolute-url-host-mismatch',
   'duplicate-host',
@@ -26,17 +26,18 @@ let tmpCounter = 0;
 function tmpId() { return `_new_${Date.now()}_${++tmpCounter}`; }
 function rowKey(item) { return item._key || item.id; }
 
-const groups = computed(() => [...new Set(drafts.value.map((item) => item.group).filter(Boolean))].sort());
 const stats = computed(() => {
-  const result = { total: drafts.value.length, active: 0, header: 0, param: 0, raw: 0 };
+  const result = { total: drafts.value.length, active: 0, standard: 0, cracking: 0, raw: 0 };
   drafts.value.forEach((item) => { if (item.active) result.active += 1; if (result[item.type] !== undefined) result[item.type] += 1; });
+  drafts.value.forEach((item) => {
+    if (item.group === 'standard') result.standard += 1;
+    if (item.group === 'cracking_the_lens') result.cracking += 1;
+  });
   return result;
 });
 const filtered = computed(() => {
   const needle = filters.value.search.toLowerCase().trim();
   return drafts.value.filter((item) => {
-    if (filters.value.type !== 'all' && item.type !== filters.value.type) return false;
-    if (filters.value.group !== 'all' && item.group !== filters.value.group) return false;
     if (filters.value.status === 'active' && !item.active) return false;
     if (filters.value.status === 'inactive' && item.active) return false;
     if (needle && ![item.key, item.value, item.group, item.comment, item.type].join(' ').toLowerCase().includes(needle)) return false;
@@ -64,7 +65,6 @@ function setModePreset(mode) {
     }
   });
 }
-function enableGroup(group, active) { drafts.value.forEach((item) => { if (item.group === group) item.active = active; }); }
 async function save() {
   saving.value = true;
   try {
@@ -85,7 +85,7 @@ function doExport() { api.exportPayloads(); }
       <div class="panel-header">
         <div>
           <h2>Payload workspace</h2>
-          <p>Edit the active payload set and apply the same Quick and Full presets used by the scan planner.</p>
+          <p>Adjust the payload set used by scans with a smaller preset bar and a single searchable table.</p>
         </div>
         <div class="action-row">
           <button class="ghost-button" @click="addRow">Add row</button>
@@ -100,23 +100,21 @@ function doExport() { api.exportPayloads(); }
       <input ref="importInput" type="file" accept=".csv,.yaml,.yml" class="hidden-input" @change="doImport" />
 
       <div class="tag-row" style="margin-bottom: 14px">
-        <button class="btn-sm" @click="setModePreset('quick')">Preset quick</button>
-        <button class="btn-sm" @click="setModePreset('full')">Preset full</button>
-        <button class="btn-sm" @click="setModePreset('none')">Disable all</button>
-        <button v-for="group in groups" :key="group + '-on'" class="btn-sm" @click="enableGroup(group, true)">{{ group }} on</button>
-        <button v-for="group in groups" :key="group + '-off'" class="btn-sm" @click="enableGroup(group, false)">{{ group }} off</button>
+        <button class="btn-sm" @click="setModePreset('quick')">Quick</button>
+        <button class="btn-sm" @click="setModePreset('full')">Full</button>
+        <button class="btn-sm" @click="setModePreset('none')">Clear</button>
       </div>
 
       <div class="hint-strip" style="margin-bottom: 14px">
-        <span><code>Preset quick</code> standard headers + dedicated <code>Host</code> + 6 raw variants</span>
-        <span><code>Preset full</code> enables every payload row</span>
+        <span><code>Quick</code> standard headers + dedicated <code>Host</code> + 6 raw variants</span>
+        <span><code>Full</code> enables every payload row</span>
       </div>
 
       <div class="stats-row">
         <div class="mini-stat"><span>Total</span><strong>{{ stats.total }}</strong></div>
         <div class="mini-stat"><span>Active</span><strong>{{ stats.active }}</strong></div>
-        <div class="mini-stat"><span>Header</span><strong>{{ stats.header }}</strong></div>
-        <div class="mini-stat"><span>Param</span><strong>{{ stats.param }}</strong></div>
+        <div class="mini-stat"><span>Standard</span><strong>{{ stats.standard }}</strong></div>
+        <div class="mini-stat"><span>Cracking</span><strong>{{ stats.cracking }}</strong></div>
         <div class="mini-stat"><span>Raw</span><strong>{{ stats.raw }}</strong></div>
       </div>
 
@@ -128,10 +126,8 @@ function doExport() { api.exportPayloads(); }
       </div>
 
       <div class="toolbar-grid">
-        <div class="form-group form-span-6"><label>Search</label><input v-model="filters.search" placeholder="Find by key, value, group, or comment" /></div>
-        <div class="form-group form-span-2"><label>Type</label><select v-model="filters.type"><option value="all">All</option><option value="header">header</option><option value="param">param</option><option value="raw">raw</option></select></div>
-        <div class="form-group form-span-2"><label>Group</label><select v-model="filters.group"><option value="all">All</option><option v-for="group in groups" :key="group" :value="group">{{ group }}</option></select></div>
-        <div class="form-group form-span-2"><label>Status</label><select v-model="filters.status"><option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+        <div class="form-group form-span-9"><label>Search</label><input v-model="filters.search" placeholder="Search key, value, group, type, or comment" /></div>
+        <div class="form-group form-span-3"><label>Show</label><select v-model="filters.status"><option value="all">All rows</option><option value="active">Enabled only</option><option value="inactive">Disabled only</option></select></div>
       </div>
     </section>
 
