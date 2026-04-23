@@ -85,7 +85,7 @@ func (e *Engine) maybeNotifyFinding(pingback database.Pingback) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	response, err := notify.SendFeishuText(ctx, cfg.FeishuWebhook, alert)
+	response, err := notify.SendFeishuCard(ctx, cfg.FeishuWebhook, alert)
 	if err != nil {
 		log.Printf("send feishu notification failed finding=%s err=%v response=%s", findingKey, err, response)
 		return

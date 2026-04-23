@@ -95,14 +95,14 @@ async function sendTestNotification() {
     </section>
 
     <section class="panel">
-      <div class="panel-header"><div><h2>Notifications</h2><p>Only high-value findings trigger Feishu messages: first confirmed HTTP/HTTPS finding, and a later evidence upgrade to strong when DNS joins the same finding.</p></div></div>
+      <div class="panel-header"><div><h2>Notifications</h2><p>Only high-value findings trigger Feishu card alerts: first confirmed HTTP/HTTPS finding, and a later evidence upgrade to strong when DNS joins the same finding.</p></div></div>
       <div class="form-grid">
         <div class="form-group form-span-3"><label>Enable notifications</label><div class="tag-row"><button class="btn-sm" :class="{ primary: form.notification_enabled }" @click="form.notification_enabled = true">Enabled</button><button class="btn-sm" :class="{ primary: !form.notification_enabled }" @click="form.notification_enabled = false">Disabled</button></div><small>DNS-only findings do not notify. HTTP/HTTPS findings do.</small></div>
-        <div class="form-group form-span-9"><label>Feishu webhook</label><input v-model="form.feishu_webhook" type="password" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." /><small>The backend sends a concise, deduplicated alert for confirmed or upgraded findings.</small></div>
+        <div class="form-group form-span-9"><label>Feishu webhook</label><input v-model="form.feishu_webhook" type="password" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." /><small>The backend sends a structured, deduplicated card for confirmed or upgraded findings.</small></div>
         <div class="form-group form-span-6"><label>Frontend base URL</label><input v-model="form.frontend_base_url" placeholder="http://154.219.112.133:8082" /><small>Optional. If set, the Feishu message includes a direct link to the Results page.</small></div>
         <div class="form-group form-span-6"><label>Notification policy</label><div class="key-list"><div class="kv-row"><span>Initial alert</span><span class="muted">First confirmed HTTP/HTTPS finding for the same target + payload.</span></div><div class="kv-row"><span>Upgrade alert</span><span class="muted">Confidence upgrades from confirmed to strong after DNS joins the same finding.</span></div><div class="kv-row"><span>Noisy cases</span><span class="muted">DNS-only findings are stored, but not pushed to Feishu.</span></div></div></div>
       </div>
-      <div class="form-actions" style="margin-top: 16px"><button class="ghost-button" :disabled="testingNotification" @click="sendTestNotification">{{ testingNotification ? 'Sending test...' : 'Send Feishu test' }}</button></div>
+      <div class="form-actions" style="margin-top: 16px"><button class="ghost-button" :disabled="testingNotification" @click="sendTestNotification">{{ testingNotification ? 'Sending test...' : 'Send Feishu card test' }}</button></div>
     </section>
 
     <section class="panel">

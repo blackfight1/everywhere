@@ -12,24 +12,24 @@ import (
 )
 
 type FindingAlert struct {
-	Title              string
-	NotificationKind   string
-	Severity           string
-	Confidence         string
-	Evidence           string
-	TargetURL          string
-	PayloadKey         string
-	PayloadType        string
-	CallbackProtocol   string
-	CallbackRemote     string
-	TriggerMethod      string
-	TriggerURL         string
-	TriggerStatus      *int
-	ScanTaskID         string
-	OccurredAt         time.Time
-	TriggerPreview     string
-	ReplayPreview      string
-	ResultsURL         string
+	Title            string
+	NotificationKind string
+	Severity         string
+	Confidence       string
+	Evidence         string
+	TargetURL        string
+	PayloadKey       string
+	PayloadType      string
+	CallbackProtocol string
+	CallbackRemote   string
+	TriggerMethod    string
+	TriggerURL       string
+	TriggerStatus    *int
+	ScanTaskID       string
+	OccurredAt       time.Time
+	TriggerPreview   string
+	ReplayPreview    string
+	ResultsURL       string
 }
 
 type webhookResponse struct {
@@ -37,18 +37,13 @@ type webhookResponse struct {
 	Msg  string `json:"msg"`
 }
 
-func SendFeishuText(ctx context.Context, webhook string, alert FindingAlert) (string, error) {
+func SendFeishuCard(ctx context.Context, webhook string, alert FindingAlert) (string, error) {
 	webhook = strings.TrimSpace(webhook)
 	if webhook == "" {
 		return "", fmt.Errorf("feishu webhook is empty")
 	}
 
-	payload := map[string]any{
-		"msg_type": "text",
-		"content": map[string]string{
-			"text": buildText(alert),
-		},
-	}
+	payload := buildCardPayload(alert)
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -86,7 +81,7 @@ func SendFeishuText(ctx context.Context, webhook string, alert FindingAlert) (st
 
 func BuildTestAlert(frontendBaseURL string) FindingAlert {
 	return FindingAlert{
-		Title:            "[Everywhere] Feishu test notification",
+		Title:            "[Everywhere] Feishu card test",
 		NotificationKind: "test",
 		Severity:         "high",
 		Confidence:       "confirmed",
@@ -106,46 +101,104 @@ func BuildTestAlert(frontendBaseURL string) FindingAlert {
 			"Cache-Control: no-transform",
 		ReplayPreview: "curl --http1.1 -H 'X-Forwarded-Host: abc.oast.site' " +
 			"'https://target.example/probe'",
-		ResultsURL: strings.TrimRight(strings.TrimSpace(frontendBaseURL), "/") + "/results?scan_task_id=feishu-test-scan",
+		ResultsURL: buildResultsURL(frontendBaseURL, "feishu-test-scan"),
 	}
 }
 
-func buildText(alert FindingAlert) string {
-	lines := []string{
-		coalesce(alert.Title, "[Everywhere] OOB finding"),
-		fmt.Sprintf("Type: %s", coalesce(alert.NotificationKind, "initial")),
-		fmt.Sprintf("Severity: %s", strings.ToUpper(coalesce(alert.Severity, "high"))),
-		fmt.Sprintf("Confidence: %s", titleWord(coalesce(alert.Confidence, "confirmed"))),
-		fmt.Sprintf("Evidence: %s", coalesce(alert.Evidence, "HTTP only")),
-		fmt.Sprintf("Target: %s", coalesce(alert.TargetURL, "-")),
-		fmt.Sprintf("Payload: %s (%s)", coalesce(alert.PayloadKey, "-"), coalesce(alert.PayloadType, "-")),
-		fmt.Sprintf("Callback: %s from %s", strings.ToUpper(coalesce(alert.CallbackProtocol, "http")), coalesce(alert.CallbackRemote, "-")),
-		fmt.Sprintf("Trigger: %s %s", coalesce(alert.TriggerMethod, "GET"), coalesce(alert.TriggerURL, alert.TargetURL)),
+func buildCardPayload(alert FindingAlert) map[string]any {
+	elements := []any{
+		map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": buildSummaryMarkdown(alert),
+			},
+		},
+		map[string]any{
+			"tag": "div",
+			"fields": []any{
+				cardField("Target", truncateInline(alert.TargetURL, 220), false),
+				cardField("Payload", fmt.Sprintf("%s (%s)", coalesce(alert.PayloadKey, "-"), coalesce(alert.PayloadType, "-")), true),
+				cardField("Callback", fmt.Sprintf("%s from %s", strings.ToUpper(coalesce(alert.CallbackProtocol, "http")), coalesce(alert.CallbackRemote, "-")), true),
+				cardField("Trigger", fmt.Sprintf("%s %s", coalesce(alert.TriggerMethod, "GET"), coalesce(alert.TriggerURL, alert.TargetURL)), false),
+			},
+		},
 	}
 
 	if alert.TriggerStatus != nil {
-		lines = append(lines, fmt.Sprintf("Response: %d", *alert.TriggerStatus))
+		elements = append(elements, map[string]any{
+			"tag": "note",
+			"elements": []any{
+				map[string]any{
+					"tag":     "plain_text",
+					"content": fmt.Sprintf("Response status: %d", *alert.TriggerStatus),
+				},
+			},
+		})
 	}
-	lines = append(lines,
-		fmt.Sprintf("Scan ID: %s", coalesce(alert.ScanTaskID, "-")),
-		fmt.Sprintf("Time: %s", alert.OccurredAt.Local().Format("2006-01-02 15:04:05 MST")),
-	)
 
-	triggerPreview := previewBlock(alert.TriggerPreview, 8, 700)
-	if triggerPreview != "" {
-		lines = append(lines, "", "Trigger preview:", triggerPreview)
+	if preview := previewBlock(alert.TriggerPreview, 8, 700); preview != "" {
+		elements = append(elements,
+			map[string]any{"tag": "hr"},
+			codeBlockElement("Trigger preview", preview),
+		)
 	}
 
-	replayPreview := previewBlock(alert.ReplayPreview, 4, 700)
-	if replayPreview != "" {
-		lines = append(lines, "", "Replay preview:", replayPreview)
+	if replay := previewBlock(alert.ReplayPreview, 4, 700); replay != "" {
+		elements = append(elements, codeBlockElement("Replay preview", replay))
 	}
+
+	elements = append(elements, map[string]any{
+		"tag": "note",
+		"elements": []any{
+			map[string]any{
+				"tag":     "plain_text",
+				"content": fmt.Sprintf("Scan ID: %s", coalesce(alert.ScanTaskID, "-")),
+			},
+			map[string]any{
+				"tag":     "plain_text",
+				"content": fmt.Sprintf("Time: %s", alert.OccurredAt.Local().Format("2006-01-02 15:04:05 MST")),
+			},
+		},
+	})
 
 	if strings.TrimSpace(alert.ResultsURL) != "" {
-		lines = append(lines, "", "Results:", strings.TrimSpace(alert.ResultsURL))
+		elements = append(elements,
+			map[string]any{"tag": "hr"},
+			map[string]any{
+				"tag": "action",
+				"actions": []any{
+					map[string]any{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "Open Results",
+						},
+						"type": "primary",
+						"url":  strings.TrimSpace(alert.ResultsURL),
+					},
+				},
+			},
+		)
 	}
 
-	return strings.Join(lines, "\n")
+	return map[string]any{
+		"msg_type": "interactive",
+		"card": map[string]any{
+			"config": map[string]any{
+				"wide_screen_mode": true,
+				"enable_forward":   true,
+			},
+			"header": map[string]any{
+				"template": cardTemplate(alert),
+				"title": map[string]any{
+					"tag":     "plain_text",
+					"content": coalesce(alert.Title, "[Everywhere] OOB finding"),
+				},
+			},
+			"elements": elements,
+		},
+	}
 }
 
 func titleWord(value string) string {
@@ -179,4 +232,87 @@ func coalesce(value string, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(value)
+}
+
+func buildSummaryMarkdown(alert FindingAlert) string {
+	lines := []string{
+		fmt.Sprintf("**Type**: %s", escapeLarkMD(coalesce(alert.NotificationKind, "initial"))),
+		fmt.Sprintf("**Severity**: %s", escapeLarkMD(strings.ToUpper(coalesce(alert.Severity, "high")))),
+		fmt.Sprintf("**Confidence**: %s", escapeLarkMD(titleWord(coalesce(alert.Confidence, "confirmed")))),
+		fmt.Sprintf("**Evidence**: %s", escapeLarkMD(coalesce(alert.Evidence, "HTTP only"))),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cardField(label string, value string, short bool) map[string]any {
+	return map[string]any{
+		"is_short": short,
+		"text": map[string]any{
+			"tag": "lark_md",
+			"content": fmt.Sprintf("**%s**\n%s",
+				escapeLarkMD(label),
+				escapeLarkMD(coalesce(value, "-")),
+			),
+		},
+	}
+}
+
+func codeBlockElement(label string, value string) map[string]any {
+	return map[string]any{
+		"tag": "div",
+		"text": map[string]any{
+			"tag": "lark_md",
+			"content": fmt.Sprintf("**%s**\n```text\n%s\n```",
+				escapeLarkMD(label),
+				sanitizeCodeFence(value),
+			),
+		},
+	}
+}
+
+func cardTemplate(alert FindingAlert) string {
+	switch {
+	case strings.EqualFold(alert.NotificationKind, "test"):
+		return "blue"
+	case strings.EqualFold(alert.Confidence, "strong"):
+		return "red"
+	case strings.EqualFold(alert.Confidence, "confirmed"):
+		return "orange"
+	default:
+		return "grey"
+	}
+}
+
+func buildResultsURL(frontendBaseURL string, scanTaskID string) string {
+	base := strings.TrimRight(strings.TrimSpace(frontendBaseURL), "/")
+	if base == "" || strings.TrimSpace(scanTaskID) == "" {
+		return ""
+	}
+	return base + "/results?scan_task_id=" + scanTaskID
+}
+
+func truncateInline(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if max > 0 && len(value) > max {
+		return value[:max] + "...(truncated)"
+	}
+	return value
+}
+
+func sanitizeCodeFence(value string) string {
+	value = strings.ReplaceAll(value, "```", "` ` `")
+	return strings.TrimSpace(value)
+}
+
+func escapeLarkMD(value string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"*", "\\*",
+		"_", "\\_",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+	)
+	return replacer.Replace(strings.TrimSpace(value))
 }

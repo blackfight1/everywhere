@@ -118,7 +118,7 @@ func (s *Server) testNotification(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 	defer cancel()
 
-	response, err := notify.SendFeishuText(ctx, webhook, alert)
+	response, err := notify.SendFeishuCard(ctx, webhook, alert)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "response": response})
 		return
