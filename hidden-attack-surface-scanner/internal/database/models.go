@@ -89,3 +89,19 @@ func (p *Pingback) BeforeCreate(_ *gorm.DB) error {
 	}
 	return nil
 }
+
+type NotificationState struct {
+	FindingKey         string    `json:"finding_key" gorm:"primaryKey;type:text"`
+	ScanTaskID         string    `json:"scan_task_id" gorm:"index"`
+	TargetURL          string    `json:"target_url" gorm:"type:text"`
+	PayloadType        string    `json:"payload_type"`
+	PayloadKey         string    `json:"payload_key" gorm:"index"`
+	Confidence         string    `json:"confidence" gorm:"index"`
+	Evidence           string    `json:"evidence"`
+	LastProtocol       string    `json:"last_protocol"`
+	LastRemoteAddress  string    `json:"last_remote_address"`
+	NotificationKind   string    `json:"notification_kind"`
+	LastNotifiedAt     time.Time `json:"last_notified_at" gorm:"index"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}

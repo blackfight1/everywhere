@@ -22,3 +22,8 @@ scanner:
 
 own_ip:
   action: "mark"
+
+notification:
+  enabled: false
+  feishu_webhook: ""
+  frontend_base_url: ""

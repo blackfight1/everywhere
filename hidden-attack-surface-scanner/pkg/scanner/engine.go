@@ -560,6 +560,7 @@ func (e *Engine) handleInteraction(
 	if err := e.db.Create(&pingback).Error; err != nil {
 		return
 	}
+	e.maybeNotifyFinding(pingback)
 
 	client.Forget(interaction.UniqueID)
 	e.db.Model(&database.ScanTask{}).Where("id = ?", entry.ScanTaskID).UpdateColumn("pingback_count", gorm.Expr("pingback_count + 1"))

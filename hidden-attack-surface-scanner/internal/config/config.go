@@ -10,41 +10,48 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	Database   DatabaseConfig   `yaml:"database"`
-	Interactsh InteractshConfig `yaml:"interactsh"`
-	Scanner    ScannerConfig    `yaml:"scanner"`
-	OwnIP      OwnIPConfig      `yaml:"own_ip"`
+	Server       ServerConfig       `json:"server" yaml:"server"`
+	Database     DatabaseConfig     `json:"database" yaml:"database"`
+	Interactsh   InteractshConfig   `json:"interactsh" yaml:"interactsh"`
+	Scanner      ScannerConfig      `json:"scanner" yaml:"scanner"`
+	OwnIP        OwnIPConfig        `json:"own_ip" yaml:"own_ip"`
+	Notification NotificationConfig `json:"notification" yaml:"notification"`
 }
 
 type ServerConfig struct {
-	Listen string `yaml:"listen"`
+	Listen string `json:"listen" yaml:"listen"`
 }
 
 type DatabaseConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Name     string `yaml:"name"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	SSLMode  string `yaml:"sslmode"`
+	Host     string `json:"host" yaml:"host"`
+	Port     int    `json:"port" yaml:"port"`
+	Name     string `json:"name" yaml:"name"`
+	User     string `json:"user" yaml:"user"`
+	Password string `json:"password" yaml:"password"`
+	SSLMode  string `json:"sslmode" yaml:"sslmode"`
 }
 
 type InteractshConfig struct {
-	ServerURL string `yaml:"server_url"`
-	Token     string `yaml:"token"`
+	ServerURL string `json:"server_url" yaml:"server_url"`
+	Token     string `json:"token" yaml:"token"`
 }
 
 type ScannerConfig struct {
-	DefaultConcurrency   int    `yaml:"default_concurrency"`
-	DefaultRateLimit     int    `yaml:"default_rate_limit"`
-	DefaultTimeoutMinute int    `yaml:"default_timeout_minutes"`
-	DefaultOrigin        string `yaml:"default_origin"`
-	DefaultReferer       string `yaml:"default_referer"`
+	DefaultConcurrency   int    `json:"default_concurrency" yaml:"default_concurrency"`
+	DefaultRateLimit     int    `json:"default_rate_limit" yaml:"default_rate_limit"`
+	DefaultTimeoutMinute int    `json:"default_timeout_minutes" yaml:"default_timeout_minutes"`
+	DefaultOrigin        string `json:"default_origin" yaml:"default_origin"`
+	DefaultReferer       string `json:"default_referer" yaml:"default_referer"`
 }
 
 type OwnIPConfig struct {
-	Action string `yaml:"action"`
+	Action string `json:"action" yaml:"action"`
+}
+
+type NotificationConfig struct {
+	Enabled         bool   `json:"enabled" yaml:"enabled"`
+	FeishuWebhook   string `json:"feishu_webhook" yaml:"feishu_webhook"`
+	FrontendBaseURL string `json:"frontend_base_url" yaml:"frontend_base_url"`
 }
 
 func Default() Config {
@@ -69,6 +76,7 @@ func Default() Config {
 		OwnIP: OwnIPConfig{
 			Action: "mark",
 		},
+		Notification: NotificationConfig{},
 	}
 }
 
@@ -99,6 +107,9 @@ func Load(path string) (Config, error) {
 	overrideString(&cfg.Scanner.DefaultOrigin, "SCANNER_DEFAULT_ORIGIN")
 	overrideString(&cfg.Scanner.DefaultReferer, "SCANNER_DEFAULT_REFERER")
 	overrideString(&cfg.OwnIP.Action, "OWN_IP_ACTION")
+	overrideBool(&cfg.Notification.Enabled, "NOTIFY_ENABLED")
+	overrideString(&cfg.Notification.FeishuWebhook, "FEISHU_WEBHOOK")
+	overrideString(&cfg.Notification.FrontendBaseURL, "NOTIFY_FRONTEND_BASE_URL")
 
 	cfg.OwnIP.Action = strings.ToLower(strings.TrimSpace(cfg.OwnIP.Action))
 	if cfg.OwnIP.Action == "" {
@@ -129,6 +140,15 @@ func overrideString(target *string, key string) {
 func overrideInt(target *int, key string) {
 	if value, ok := os.LookupEnv(key); ok {
 		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			*target = parsed
+		}
+	}
+}
+
+func overrideBool(target *bool, key string) {
+	if value, ok := os.LookupEnv(key); ok {
+		parsed, err := strconv.ParseBool(value)
 		if err == nil {
 			*target = parsed
 		}

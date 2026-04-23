@@ -18,7 +18,7 @@ func Open(cfg appconfig.Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if err := db.AutoMigrate(&ScanTask{}, &PayloadTemplate{}, &SentPayload{}, &Pingback{}); err != nil {
+	if err := db.AutoMigrate(&ScanTask{}, &PayloadTemplate{}, &SentPayload{}, &Pingback{}, &NotificationState{}); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	if err := migratePingbackIndexes(db); err != nil {

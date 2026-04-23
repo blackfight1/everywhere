@@ -57,4 +57,5 @@ export const api = {
     // Settings
     getSettings: () => request('/api/settings'),
     updateSettings: (data) => request('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    testNotification: (data) => request('/api/settings/notification/test', { method: 'POST', body: JSON.stringify(data) }),
 };

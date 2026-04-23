@@ -67,6 +67,9 @@ func (s *Server) deleteScan(c *gin.Context) {
 	_ = s.engine.StopScan(taskID)
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&database.NotificationState{}, "scan_task_id = ?", taskID).Error; err != nil {
+			return err
+		}
 		if err := tx.Delete(&database.Pingback{}, "scan_task_id = ?", taskID).Error; err != nil {
 			return err
 		}

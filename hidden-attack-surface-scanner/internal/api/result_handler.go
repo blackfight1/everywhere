@@ -1,10 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	"strings"
+	"time"
 
 	appconfig "hidden-attack-surface-scanner/internal/config"
 	"hidden-attack-surface-scanner/internal/database"
+	"hidden-attack-surface-scanner/pkg/notify"
 
 	"github.com/gin-gonic/gin"
 )
@@ -78,6 +82,51 @@ func (s *Server) updateSettings(c *gin.Context) {
 	if input.OwnIP.Action != "" {
 		s.cfg.OwnIP.Action = input.OwnIP.Action
 	}
+	s.cfg.Notification = input.Notification
 
 	c.JSON(http.StatusOK, s.cfg)
+}
+
+type testNotificationRequest struct {
+	Enabled         bool   `json:"enabled"`
+	FeishuWebhook   string `json:"feishu_webhook"`
+	FrontendBaseURL string `json:"frontend_base_url"`
+}
+
+func (s *Server) testNotification(c *gin.Context) {
+	var input testNotificationRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	webhook := strings.TrimSpace(input.FeishuWebhook)
+	if webhook == "" {
+		webhook = strings.TrimSpace(s.cfg.Notification.FeishuWebhook)
+	}
+	if webhook == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "feishu webhook is empty"})
+		return
+	}
+
+	baseURL := strings.TrimSpace(input.FrontendBaseURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(s.cfg.Notification.FrontendBaseURL)
+	}
+
+	alert := notify.BuildTestAlert(baseURL)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
+	defer cancel()
+
+	response, err := notify.SendFeishuText(ctx, webhook, alert)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "response": response})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "sent",
+		"response":     response,
+		"preview_text": alert.Title,
+	})
 }

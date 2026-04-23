@@ -50,6 +50,7 @@ func NewRouter(db *gorm.DB, cfg *appconfig.Config, engine *scanner.Engine, hub *
 		api.GET("/stats", server.getStats)
 		api.GET("/settings", server.getSettings)
 		api.PUT("/settings", server.updateSettings)
+		api.POST("/settings/notification/test", server.testNotification)
 		api.GET("/ws", server.handleWS)
 	}
 
