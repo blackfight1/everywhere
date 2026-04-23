@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	appconfig "hidden-attack-surface-scanner/internal/config"
 	"hidden-attack-surface-scanner/internal/database"
 	"hidden-attack-surface-scanner/pkg/correlator"
+	"hidden-attack-surface-scanner/pkg/notify"
 	"hidden-attack-surface-scanner/pkg/oob"
 	"hidden-attack-surface-scanner/pkg/payload"
 
@@ -132,7 +134,12 @@ func (e *Engine) StopScan(taskID string) error {
 }
 
 func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanRequest) {
-	defer e.clearTask(taskID)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			e.failTask(taskID, fmt.Errorf("panic: %v", recovered), string(debug.Stack()))
+		}
+		e.clearTask(taskID)
+	}()
 
 	now := time.Now().UTC()
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
@@ -149,7 +156,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 
 	client, err := oob.New(req.InteractshServer, req.InteractshToken)
 	if err != nil {
-		e.failTask(taskID, err)
+		e.failTask(taskID, err, "")
 		return
 	}
 	defer client.Stop()
@@ -157,7 +164,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	e.broadcastLog(taskID, "info", "Initializing HTTP client...")
 	httpClient, err := NewHTTPClient(req.Proxy, 15*time.Second)
 	if err != nil {
-		e.failTask(taskID, err)
+		e.failTask(taskID, err, "")
 		return
 	}
 
@@ -165,7 +172,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	if err := client.StartPolling(5*time.Second, func(interaction *server.Interaction, entry oob.CorrelationEntry, ok bool) {
 		e.handleInteraction(taskID, client, interaction, entry, ok)
 	}); err != nil {
-		e.failTask(taskID, err)
+		e.failTask(taskID, err, "")
 		return
 	}
 
@@ -177,7 +184,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	e.broadcastLog(taskID, "info", fmt.Sprintf("Loading payloads for mode=%s...", req.Mode))
 	items, err := e.loadPayloads(req.Mode)
 	if err != nil {
-		e.failTask(taskID, err)
+		e.failTask(taskID, err, "")
 		return
 	}
 	e.broadcastLog(taskID, "info", fmt.Sprintf("Loaded %d payloads, dispatching to %d targets (concurrency=%d, rate_limit=%d)...",
@@ -186,7 +193,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	e.broadcastProgress(taskID, 0, totalRequests)
 
 	if err := e.dispatch(ctx, taskID, req, client, httpClient, items, totalRequests); err != nil && !errors.Is(err, context.Canceled) {
-		e.failTask(taskID, err)
+		e.failTask(taskID, err, "")
 		return
 	}
 
@@ -625,10 +632,15 @@ func (e *Engine) finishTask(taskID string, status string) {
 	})
 }
 
-func (e *Engine) failTask(taskID string, err error) {
+func (e *Engine) failTask(taskID string, err error, detail string) {
+	lastError := ""
+	if err != nil {
+		lastError = err.Error()
+	}
+
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
 		"status":       "failed",
-		"last_error":   err.Error(),
+		"last_error":   lastError,
 		"completed_at": time.Now().UTC(),
 	})
 	e.broadcast(map[string]any{
@@ -636,8 +648,48 @@ func (e *Engine) failTask(taskID string, err error) {
 		"task_id": taskID,
 		"scan_id": taskID,
 		"status":  "failed",
-		"error":   err.Error(),
+		"error":   lastError,
 	})
+	e.maybeNotifyTaskFailure(taskID, err, detail)
+}
+
+func (e *Engine) maybeNotifyTaskFailure(taskID string, err error, detail string) {
+	cfg := e.cfg.Notification
+	if !cfg.Enabled || strings.TrimSpace(cfg.FeishuWebhook) == "" {
+		return
+	}
+
+	var task database.ScanTask
+	if dbErr := e.db.First(&task, "id = ?", taskID).Error; dbErr != nil {
+		log.Printf("load failed task for notification failed task=%s err=%v", taskID, dbErr)
+		return
+	}
+
+	configPreview := strings.TrimSpace(task.Config)
+	if strings.TrimSpace(detail) != "" {
+		if configPreview != "" {
+			configPreview += "\n\n"
+		}
+		configPreview += strings.TrimSpace(detail)
+	}
+
+	alert := notify.BuildScanErrorAlert(
+		task.ID,
+		task.Mode,
+		task.TargetCount,
+		task.RequestSent,
+		err,
+		cfg.FrontendBaseURL,
+		configPreview,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	response, notifyErr := notify.SendFeishuScanErrorCard(ctx, cfg.FeishuWebhook, alert)
+	if notifyErr != nil {
+		log.Printf("send scan failure notification failed task=%s err=%v response=%s", taskID, notifyErr, response)
+	}
 }
 
 func (e *Engine) clearTask(taskID string) {
