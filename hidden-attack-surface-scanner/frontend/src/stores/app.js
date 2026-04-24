@@ -66,6 +66,15 @@ export const useAppStore = defineStore('app', () => {
             if (scan) {
                 scan.request_sent = msg.sent;
                 scan._total = msg.total;
+                scan.estimated_requests = msg.estimated_requests ?? scan.estimated_requests;
+                scan.status = msg.status || scan.status;
+                scan.target_count = msg.target_count ?? scan.target_count;
+                scan.batch_size = msg.batch_size ?? scan.batch_size;
+                scan.batch_count = msg.batch_count ?? scan.batch_count;
+                scan.current_batch = msg.current_batch ?? scan.current_batch;
+                scan.completed_targets = msg.completed_targets ?? scan.completed_targets;
+                scan.current_target = msg.current_target ?? scan.current_target;
+                scan.current_stage = msg.current_stage ?? scan.current_stage;
             }
         }
     }

@@ -41,7 +41,11 @@ export const useWebSocketStore = defineStore('websocket', () => {
                 listeners.forEach(fn => fn(msg));
 
                 if (msg.type === 'scan_progress') {
-                    addLog('debug', `Scan ${scanID}: ${msg.sent}/${msg.total} requests sent`, { scan_id: scanID });
+                    const batch = msg.batch_count ? ` batch ${msg.current_batch || 0}/${msg.batch_count}` : '';
+                    const target = msg.current_target ? ` target ${msg.current_target}` : '';
+                    const stage = msg.current_stage ? ` stage ${msg.current_stage}` : '';
+                    const completed = msg.target_count ? ` hosts ${msg.completed_targets || 0}/${msg.target_count}` : '';
+                    addLog('debug', `Scan ${scanID}:${batch}${completed}${stage}${target} requests ${msg.sent}/${msg.total}`, { scan_id: scanID });
                 } else if (msg.type === 'new_pingback' || msg.type === 'pingback') {
                     const pb = msg.data || {};
                     addLog('warn', `Pingback [${pb.callback_protocol}] from ${pb.target_url} via ${pb.payload_key} (${pb.severity})`, { scan_id: pb.scan_task_id });

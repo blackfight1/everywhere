@@ -49,6 +49,7 @@ type StartScanRequest struct {
 	Targets                []string          `json:"targets"`
 	Mode                   string            `json:"mode"`
 	Concurrency            int               `json:"concurrency"`
+	BatchSize              int               `json:"batch_size"`
 	RateLimit              int               `json:"rate_limit"`
 	CallbackTimeoutMinutes int               `json:"callback_timeout_minutes"`
 	Proxy                  string            `json:"proxy"`
@@ -104,10 +105,13 @@ func (e *Engine) StartScan(req StartScanRequest) (*database.ScanTask, error) {
 	}
 
 	task := &database.ScanTask{
-		Status:      "pending",
-		Mode:        strings.ToLower(req.Mode),
-		Config:      string(configJSON),
-		TargetCount: len(req.Targets),
+		Status:       "pending",
+		Mode:         strings.ToLower(req.Mode),
+		Config:       string(configJSON),
+		TargetCount:  len(req.Targets),
+		BatchSize:    req.BatchSize,
+		BatchCount:   batchCount(len(req.Targets), req.BatchSize),
+		CurrentStage: "queued",
 	}
 	if err := e.db.Create(task).Error; err != nil {
 		return nil, err
@@ -143,9 +147,10 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 
 	now := time.Now().UTC()
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
-		"status":     "running",
-		"started_at": now,
-		"last_error": "",
+		"status":        "running",
+		"started_at":    now,
+		"last_error":    "",
+		"current_stage": "preparing",
 	})
 	e.broadcast(map[string]any{
 		"type":    "task_status",
@@ -190,11 +195,28 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	e.broadcastLog(taskID, "info", fmt.Sprintf("Loaded %d payloads, dispatching to %d targets (concurrency=%d, rate_limit=%d)...",
 		len(items), len(req.Targets), req.Concurrency, req.RateLimit))
 	totalRequests := estimateTotalRequests(req, items)
+	batches := chunkTargets(req.Targets, req.BatchSize)
+	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Update("estimated_requests", totalRequests)
 	e.broadcastProgress(taskID, 0, totalRequests)
+	e.broadcastLog(taskID, "info", fmt.Sprintf("Split %d targets into %d batch(es) with batch_size=%d.", len(req.Targets), len(batches), req.BatchSize))
 
-	if err := e.dispatch(ctx, taskID, req, client, httpClient, items, totalRequests); err != nil && !errors.Is(err, context.Canceled) {
-		e.failTask(taskID, err, "")
-		return
+	for idx, targets := range batches {
+		batchIndex := idx + 1
+		e.broadcastLog(taskID, "info", fmt.Sprintf("Batch %d/%d started (%d targets).", batchIndex, len(batches), len(targets)))
+		e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
+			"current_batch": batchIndex,
+			"current_stage": "dispatching",
+		})
+		e.broadcastProgress(taskID, 0, totalRequests)
+
+		if err := e.dispatch(ctx, taskID, req, client, httpClient, targets, items, totalRequests, batchIndex, len(batches)); err != nil && !errors.Is(err, context.Canceled) {
+			e.failTask(taskID, err, "")
+			return
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			break
+		}
+		e.broadcastLog(taskID, "info", fmt.Sprintf("Batch %d/%d dispatched.", batchIndex, len(batches)))
 	}
 
 	if errors.Is(ctx.Err(), context.Canceled) {
@@ -203,7 +225,11 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 	}
 
 	e.broadcastLog(taskID, "info", fmt.Sprintf("All requests dispatched. Waiting for OOB callbacks (timeout=%dm)...", req.CallbackTimeoutMinutes))
-	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{"status": "waiting_callback"})
+	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
+		"status":         "waiting_callback",
+		"current_target": "",
+		"current_stage":  "waiting_callback",
+	})
 	e.broadcast(map[string]any{
 		"type":    "task_status",
 		"task_id": taskID,
@@ -228,8 +254,11 @@ func (e *Engine) dispatch(
 	req StartScanRequest,
 	client *oob.Client,
 	httpClient *http.Client,
+	targets []string,
 	items []payload.Payload,
 	totalRequests int,
+	batchIndex int,
+	batchTotal int,
 ) error {
 	limiter := rate.NewLimiter(rate.Inf, 1)
 	if req.RateLimit > 0 {
@@ -250,13 +279,6 @@ func (e *Engine) dispatch(
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				if err := limiter.Wait(ctx); err != nil {
-					select {
-					case errCh <- err:
-					default:
-					}
-					return
-				}
 				if err := job(); err != nil && !errors.Is(err, context.Canceled) {
 					select {
 					case errCh <- err:
@@ -272,59 +294,15 @@ func (e *Engine) dispatch(
 	rawPayloads := filterPayloadsByType(items, payload.TypeRaw)
 
 enqueueLoop:
-	for _, target := range req.Targets {
+	for idx, target := range targets {
 		target := target
-		if len(standardPayloads) > 0 {
-			select {
-			case jobs <- func() error {
-				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, standardPayloads, totalRequests)
-			}:
-			case <-ctx.Done():
-				break enqueueLoop
-			}
-		}
-		if len(hostPayloads) > 0 {
-			select {
-			case jobs <- func() error {
-				return e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, hostPayloads, totalRequests)
-			}:
-			case <-ctx.Done():
-				break enqueueLoop
-			}
-		}
-
-		for _, rawPayload := range rawPayloads {
-			if rawPayload.Key == "alt-ports" {
-				continue
-			}
-			rawPayload := rawPayload
-			select {
-			case jobs <- func() error { return e.sendRawTarget(ctx, taskID, req, client, target, rawPayload, totalRequests) }:
-			case <-ctx.Done():
-				break enqueueLoop
-			}
-		}
-
-		for _, altTarget := range buildAltTargets(target, req.AltPorts) {
-			altTarget := altTarget
-			if len(standardPayloads) > 0 {
-				select {
-				case jobs <- func() error {
-					return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads, totalRequests)
-				}:
-				case <-ctx.Done():
-					break enqueueLoop
-				}
-			}
-			if len(hostPayloads) > 0 {
-				select {
-				case jobs <- func() error {
-					return e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, hostPayloads, totalRequests)
-				}:
-				case <-ctx.Done():
-					break enqueueLoop
-				}
-			}
+		targetOrdinal := idx + 1
+		select {
+		case jobs <- func() error {
+			return e.scanTarget(ctx, taskID, req, client, httpClient, limiter, target, standardPayloads, hostPayloads, rawPayloads, totalRequests, batchIndex, batchTotal, targetOrdinal, len(targets))
+		}:
+		case <-ctx.Done():
+			break enqueueLoop
 		}
 	}
 
@@ -339,6 +317,92 @@ enqueueLoop:
 	}
 }
 
+func (e *Engine) scanTarget(
+	ctx context.Context,
+	taskID string,
+	req StartScanRequest,
+	client *oob.Client,
+	httpClient *http.Client,
+	limiter *rate.Limiter,
+	target string,
+	standardPayloads []payload.Payload,
+	hostPayloads []payload.Payload,
+	rawPayloads []payload.Payload,
+	totalRequests int,
+	batchIndex int,
+	batchTotal int,
+	targetOrdinal int,
+	batchTargetCount int,
+) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	e.setTaskActivity(taskID, batchIndex, target, fmt.Sprintf("target %d/%d", targetOrdinal, batchTargetCount), totalRequests)
+	e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d started: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, target))
+
+	if len(standardPayloads) > 0 {
+		if err := limiter.Wait(ctx); err != nil {
+			return err
+		}
+		e.setTaskActivity(taskID, batchIndex, target, "standard-headers", totalRequests)
+		e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d standard headers dispatched: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, target))
+		if err := e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, standardPayloads, totalRequests); err != nil {
+			return err
+		}
+	}
+
+	if len(hostPayloads) > 0 {
+		if err := limiter.Wait(ctx); err != nil {
+			return err
+		}
+		e.setTaskActivity(taskID, batchIndex, target, "host-only", totalRequests)
+		e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d host-only dispatched: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, target))
+		if err := e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, hostPayloads, totalRequests); err != nil {
+			return err
+		}
+	}
+
+	for _, rawPayload := range rawPayloads {
+		if rawPayload.Key == "alt-ports" {
+			continue
+		}
+		if err := limiter.Wait(ctx); err != nil {
+			return err
+		}
+		e.setTaskActivity(taskID, batchIndex, target, "raw-"+rawPayload.Key, totalRequests)
+		e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d raw %s dispatched: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, rawPayload.Key, target))
+		if err := e.sendRawTarget(ctx, taskID, req, client, target, rawPayload, totalRequests); err != nil {
+			return err
+		}
+	}
+
+	for _, altTarget := range buildAltTargets(target, req.AltPorts) {
+		if len(standardPayloads) > 0 {
+			if err := limiter.Wait(ctx); err != nil {
+				return err
+			}
+			e.setTaskActivity(taskID, batchIndex, altTarget, "alt-port-standard", totalRequests)
+			if err := e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads, totalRequests); err != nil {
+				return err
+			}
+		}
+		if len(hostPayloads) > 0 {
+			if err := limiter.Wait(ctx); err != nil {
+				return err
+			}
+			e.setTaskActivity(taskID, batchIndex, altTarget, "alt-port-host-only", totalRequests)
+			if err := e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, hostPayloads, totalRequests); err != nil {
+				return err
+			}
+		}
+	}
+
+	e.markTargetCompleted(taskID, batchIndex, totalRequests)
+	e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d completed: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, target))
+	return nil
+}
+
 func (e *Engine) sendStandardTarget(
 	ctx context.Context,
 	taskID string,
@@ -349,7 +413,6 @@ func (e *Engine) sendStandardTarget(
 	items []payload.Payload,
 	totalRequests int,
 ) error {
-	e.broadcastLog(taskID, "debug", fmt.Sprintf("Scanning target: %s (%d payloads)", target, len(items)))
 	parsed, err := url.Parse(target)
 	if err != nil {
 		return err
@@ -610,19 +673,33 @@ func (e *Engine) pingbackExists(uniqueID string, protocol string) (bool, error) 
 
 func (e *Engine) incrementRequestCount(taskID string, total int) {
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).UpdateColumn("request_sent", gorm.Expr("request_sent + 1"))
+	e.broadcastProgress(taskID, 0, total)
+}
 
-	var task database.ScanTask
-	if err := e.db.Select("request_sent").First(&task, "id = ?", taskID).Error; err != nil {
-		return
-	}
-	e.broadcastProgress(taskID, task.RequestSent, total)
+func (e *Engine) setTaskActivity(taskID string, batchIndex int, target string, stage string, total int) {
+	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
+		"current_batch":  batchIndex,
+		"current_target": target,
+		"current_stage":  stage,
+	})
+	e.broadcastProgress(taskID, 0, total)
+}
+
+func (e *Engine) markTargetCompleted(taskID string, batchIndex int, total int) {
+	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
+		"current_batch":     batchIndex,
+		"completed_targets": gorm.Expr("completed_targets + 1"),
+	})
+	e.broadcastProgress(taskID, 0, total)
 }
 
 func (e *Engine) finishTask(taskID string, status string) {
 	now := time.Now().UTC()
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
-		"status":       status,
-		"completed_at": now,
+		"status":         status,
+		"completed_at":   now,
+		"current_target": "",
+		"current_stage":  status,
 	})
 	e.broadcast(map[string]any{
 		"type":    "task_status",
@@ -639,9 +716,11 @@ func (e *Engine) failTask(taskID string, err error, detail string) {
 	}
 
 	e.db.Model(&database.ScanTask{}).Where("id = ?", taskID).Updates(map[string]any{
-		"status":       "failed",
-		"last_error":   lastError,
-		"completed_at": time.Now().UTC(),
+		"status":         "failed",
+		"last_error":     lastError,
+		"completed_at":   time.Now().UTC(),
+		"current_target": "",
+		"current_stage":  "failed",
 	})
 	e.broadcast(map[string]any{
 		"type":    "task_status",
@@ -717,12 +796,28 @@ func (e *Engine) broadcastLog(taskID string, level string, message string) {
 }
 
 func (e *Engine) broadcastProgress(taskID string, sent int, total int) {
+	var task database.ScanTask
+	if err := e.db.Select("request_sent", "target_count", "estimated_requests", "batch_size", "batch_count", "current_batch", "completed_targets", "current_target", "current_stage", "status").First(&task, "id = ?", taskID).Error; err != nil {
+		return
+	}
+	if sent <= 0 {
+		sent = task.RequestSent
+	}
 	e.broadcast(map[string]any{
-		"type":    "scan_progress",
-		"task_id": taskID,
-		"scan_id": taskID,
-		"sent":    sent,
-		"total":   total,
+		"type":               "scan_progress",
+		"task_id":            taskID,
+		"scan_id":            taskID,
+		"sent":               sent,
+		"total":              total,
+		"status":             task.Status,
+		"target_count":       task.TargetCount,
+		"estimated_requests": task.EstimatedRequests,
+		"batch_size":         task.BatchSize,
+		"batch_count":        task.BatchCount,
+		"current_batch":      task.CurrentBatch,
+		"completed_targets":  task.CompletedTargets,
+		"current_target":     task.CurrentTarget,
+		"current_stage":      task.CurrentStage,
 	})
 }
 
@@ -733,6 +828,9 @@ func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
 	}
 	if r.Concurrency <= 0 {
 		r.Concurrency = cfg.Scanner.DefaultConcurrency
+	}
+	if r.BatchSize <= 0 {
+		r.BatchSize = cfg.Scanner.DefaultBatchSize
 	}
 	if r.RateLimit < -1 {
 		r.RateLimit = -1
@@ -903,6 +1001,39 @@ func buildAltTargets(target string, ports []int) []string {
 		results = append(results, cloned.String())
 	}
 	return results
+}
+
+func batchCount(totalTargets int, batchSize int) int {
+	if totalTargets <= 0 {
+		return 0
+	}
+	if batchSize <= 0 {
+		batchSize = totalTargets
+	}
+	count := totalTargets / batchSize
+	if totalTargets%batchSize != 0 {
+		count++
+	}
+	return count
+}
+
+func chunkTargets(targets []string, batchSize int) [][]string {
+	if len(targets) == 0 {
+		return nil
+	}
+	if batchSize <= 0 || batchSize >= len(targets) {
+		return [][]string{append([]string(nil), targets...)}
+	}
+
+	chunks := make([][]string, 0, batchCount(len(targets), batchSize))
+	for start := 0; start < len(targets); start += batchSize {
+		end := start + batchSize
+		if end > len(targets) {
+			end = len(targets)
+		}
+		chunks = append(chunks, append([]string(nil), targets[start:end]...))
+	}
+	return chunks
 }
 
 func estimateTotalRequests(req StartScanRequest, items []payload.Payload) int {

@@ -15,6 +15,7 @@ interactsh:
 
 scanner:
   default_concurrency: 10
+  default_batch_size: 1500
   default_rate_limit: 20
   default_timeout_minutes: 1440
   default_origin: ""

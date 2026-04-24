@@ -12,6 +12,7 @@ const form = reactive({
   interactsh_server: '',
   interactsh_token: '',
   default_concurrency: 10,
+  default_batch_size: 1500,
   default_rate_limit: 20,
   default_timeout_minutes: 1440,
   default_origin: '',
@@ -28,6 +29,7 @@ onMounted(async () => {
   form.interactsh_server = app.settings.interactsh?.server_url || '';
   form.interactsh_token = app.settings.interactsh?.token || '';
   form.default_concurrency = app.settings.scanner?.default_concurrency || 10;
+  form.default_batch_size = app.settings.scanner?.default_batch_size || 1500;
   form.default_rate_limit = app.settings.scanner?.default_rate_limit || 20;
   form.default_timeout_minutes = app.settings.scanner?.default_timeout_minutes || 1440;
   form.default_origin = app.settings.scanner?.default_origin || '';
@@ -43,7 +45,7 @@ async function saveSettings() {
   try {
     await api.updateSettings({
       interactsh: { server_url: form.interactsh_server, token: form.interactsh_token },
-      scanner: { default_concurrency: Number(form.default_concurrency), default_rate_limit: Number(form.default_rate_limit), default_timeout_minutes: Number(form.default_timeout_minutes), default_origin: form.default_origin, default_referer: form.default_referer },
+      scanner: { default_concurrency: Number(form.default_concurrency), default_batch_size: Number(form.default_batch_size), default_rate_limit: Number(form.default_rate_limit), default_timeout_minutes: Number(form.default_timeout_minutes), default_origin: form.default_origin, default_referer: form.default_referer },
       own_ip: { action: form.own_ip_action },
       notification: { enabled: form.notification_enabled, feishu_webhook: form.feishu_webhook, frontend_base_url: form.frontend_base_url },
     });
@@ -81,6 +83,7 @@ async function sendTestNotification() {
         <div class="form-group form-span-6"><label>Interactsh server URL</label><input v-model="form.interactsh_server" placeholder="oob.example.com" /><small>Leave empty to use the public Interactsh pool.</small></div>
         <div class="form-group form-span-6"><label>Interactsh token</label><input v-model="form.interactsh_token" type="password" placeholder="Optional authentication token" /></div>
         <div class="form-group form-span-4"><label>Default concurrency</label><input v-model.number="form.default_concurrency" type="number" min="1" max="500" /></div>
+        <div class="form-group form-span-4"><label>Default batch size</label><input v-model.number="form.default_batch_size" type="number" min="1" max="5000" /></div>
         <div class="form-group form-span-4"><label>Default rate limit</label><input v-model.number="form.default_rate_limit" type="number" min="0" /></div>
         <div class="form-group form-span-4"><label>Default timeout (minutes)</label><input v-model.number="form.default_timeout_minutes" type="number" min="1" /></div>
         <div class="form-group form-span-6"><label>Default origin</label><input v-model="form.default_origin" placeholder="https://example.com" /></div>

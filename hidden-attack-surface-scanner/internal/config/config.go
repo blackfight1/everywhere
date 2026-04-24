@@ -38,6 +38,7 @@ type InteractshConfig struct {
 
 type ScannerConfig struct {
 	DefaultConcurrency   int    `json:"default_concurrency" yaml:"default_concurrency"`
+	DefaultBatchSize     int    `json:"default_batch_size" yaml:"default_batch_size"`
 	DefaultRateLimit     int    `json:"default_rate_limit" yaml:"default_rate_limit"`
 	DefaultTimeoutMinute int    `json:"default_timeout_minutes" yaml:"default_timeout_minutes"`
 	DefaultOrigin        string `json:"default_origin" yaml:"default_origin"`
@@ -70,6 +71,7 @@ func Default() Config {
 		Interactsh: InteractshConfig{},
 		Scanner: ScannerConfig{
 			DefaultConcurrency:   10,
+			DefaultBatchSize:     1500,
 			DefaultRateLimit:     20,
 			DefaultTimeoutMinute: 1440,
 		},
@@ -102,6 +104,7 @@ func Load(path string) (Config, error) {
 	overrideString(&cfg.Interactsh.ServerURL, "INTERACTSH_SERVER")
 	overrideString(&cfg.Interactsh.Token, "INTERACTSH_TOKEN")
 	overrideInt(&cfg.Scanner.DefaultConcurrency, "SCANNER_DEFAULT_CONCURRENCY")
+	overrideInt(&cfg.Scanner.DefaultBatchSize, "SCANNER_DEFAULT_BATCH_SIZE")
 	overrideInt(&cfg.Scanner.DefaultRateLimit, "SCANNER_DEFAULT_RATE_LIMIT")
 	overrideInt(&cfg.Scanner.DefaultTimeoutMinute, "SCANNER_DEFAULT_TIMEOUT_MINUTES")
 	overrideString(&cfg.Scanner.DefaultOrigin, "SCANNER_DEFAULT_ORIGIN")
@@ -114,6 +117,9 @@ func Load(path string) (Config, error) {
 	cfg.OwnIP.Action = strings.ToLower(strings.TrimSpace(cfg.OwnIP.Action))
 	if cfg.OwnIP.Action == "" {
 		cfg.OwnIP.Action = "mark"
+	}
+	if cfg.Scanner.DefaultBatchSize <= 0 {
+		cfg.Scanner.DefaultBatchSize = 1500
 	}
 
 	return cfg, nil

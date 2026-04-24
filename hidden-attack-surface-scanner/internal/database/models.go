@@ -8,17 +8,24 @@ import (
 )
 
 type ScanTask struct {
-	ID            string    `json:"id" gorm:"primaryKey;size:36"`
-	Status        string    `json:"status" gorm:"index"`
-	Mode          string    `json:"mode"`
-	Config        string    `json:"config" gorm:"type:text"`
-	TargetCount   int       `json:"target_count"`
-	RequestSent   int       `json:"request_sent"`
-	PingbackCount int       `json:"pingback_count"`
-	CreatedAt     time.Time `json:"created_at"`
-	StartedAt     time.Time `json:"started_at"`
-	CompletedAt   time.Time `json:"completed_at"`
-	LastError     string    `json:"last_error" gorm:"type:text"`
+	ID                string    `json:"id" gorm:"primaryKey;size:36"`
+	Status            string    `json:"status" gorm:"index"`
+	Mode              string    `json:"mode"`
+	Config            string    `json:"config" gorm:"type:text"`
+	TargetCount       int       `json:"target_count"`
+	EstimatedRequests int       `json:"estimated_requests"`
+	RequestSent       int       `json:"request_sent"`
+	PingbackCount     int       `json:"pingback_count"`
+	BatchSize         int       `json:"batch_size"`
+	BatchCount        int       `json:"batch_count"`
+	CurrentBatch      int       `json:"current_batch"`
+	CompletedTargets  int       `json:"completed_targets"`
+	CurrentTarget     string    `json:"current_target" gorm:"type:text"`
+	CurrentStage      string    `json:"current_stage"`
+	CreatedAt         time.Time `json:"created_at"`
+	StartedAt         time.Time `json:"started_at"`
+	CompletedAt       time.Time `json:"completed_at"`
+	LastError         string    `json:"last_error" gorm:"type:text"`
 }
 
 func (s *ScanTask) BeforeCreate(_ *gorm.DB) error {
@@ -91,17 +98,17 @@ func (p *Pingback) BeforeCreate(_ *gorm.DB) error {
 }
 
 type NotificationState struct {
-	FindingKey         string    `json:"finding_key" gorm:"primaryKey;type:text"`
-	ScanTaskID         string    `json:"scan_task_id" gorm:"index"`
-	TargetURL          string    `json:"target_url" gorm:"type:text"`
-	PayloadType        string    `json:"payload_type"`
-	PayloadKey         string    `json:"payload_key" gorm:"index"`
-	Confidence         string    `json:"confidence" gorm:"index"`
-	Evidence           string    `json:"evidence"`
-	LastProtocol       string    `json:"last_protocol"`
-	LastRemoteAddress  string    `json:"last_remote_address"`
-	NotificationKind   string    `json:"notification_kind"`
-	LastNotifiedAt     time.Time `json:"last_notified_at" gorm:"index"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	FindingKey        string    `json:"finding_key" gorm:"primaryKey;type:text"`
+	ScanTaskID        string    `json:"scan_task_id" gorm:"index"`
+	TargetURL         string    `json:"target_url" gorm:"type:text"`
+	PayloadType       string    `json:"payload_type"`
+	PayloadKey        string    `json:"payload_key" gorm:"index"`
+	Confidence        string    `json:"confidence" gorm:"index"`
+	Evidence          string    `json:"evidence"`
+	LastProtocol      string    `json:"last_protocol"`
+	LastRemoteAddress string    `json:"last_remote_address"`
+	NotificationKind  string    `json:"notification_kind"`
+	LastNotifiedAt    time.Time `json:"last_notified_at" gorm:"index"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
