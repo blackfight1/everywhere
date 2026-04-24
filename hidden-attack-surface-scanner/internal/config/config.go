@@ -16,6 +16,7 @@ type Config struct {
 	Scanner      ScannerConfig      `json:"scanner" yaml:"scanner"`
 	OwnIP        OwnIPConfig        `json:"own_ip" yaml:"own_ip"`
 	Notification NotificationConfig `json:"notification" yaml:"notification"`
+	Auth         AuthConfig         `json:"-" yaml:"auth"`
 }
 
 type ServerConfig struct {
@@ -55,6 +56,13 @@ type NotificationConfig struct {
 	FrontendBaseURL string `json:"frontend_base_url" yaml:"frontend_base_url"`
 }
 
+type AuthConfig struct {
+	Username      string `json:"-" yaml:"username"`
+	Password      string `json:"-" yaml:"password"`
+	SessionSecret string `json:"-" yaml:"session_secret"`
+	CookieName    string `json:"-" yaml:"cookie_name"`
+}
+
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
@@ -79,6 +87,12 @@ func Default() Config {
 			Action: "mark",
 		},
 		Notification: NotificationConfig{},
+		Auth: AuthConfig{
+			Username:      "leftshoulder",
+			Password:      "yy233966",
+			SessionSecret: "leftshoulder-session-secret-change-me",
+			CookieName:    "hass_session",
+		},
 	}
 }
 
@@ -113,6 +127,10 @@ func Load(path string) (Config, error) {
 	overrideBool(&cfg.Notification.Enabled, "NOTIFY_ENABLED")
 	overrideString(&cfg.Notification.FeishuWebhook, "FEISHU_WEBHOOK")
 	overrideString(&cfg.Notification.FrontendBaseURL, "NOTIFY_FRONTEND_BASE_URL")
+	overrideString(&cfg.Auth.Username, "AUTH_USERNAME")
+	overrideString(&cfg.Auth.Password, "AUTH_PASSWORD")
+	overrideString(&cfg.Auth.SessionSecret, "AUTH_SESSION_SECRET")
+	overrideString(&cfg.Auth.CookieName, "AUTH_COOKIE_NAME")
 
 	cfg.OwnIP.Action = strings.ToLower(strings.TrimSpace(cfg.OwnIP.Action))
 	if cfg.OwnIP.Action == "" {
@@ -120,6 +138,18 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Scanner.DefaultBatchSize <= 0 {
 		cfg.Scanner.DefaultBatchSize = 1500
+	}
+	if strings.TrimSpace(cfg.Auth.Username) == "" {
+		cfg.Auth.Username = "leftshoulder"
+	}
+	if strings.TrimSpace(cfg.Auth.Password) == "" {
+		cfg.Auth.Password = "yy233966"
+	}
+	if strings.TrimSpace(cfg.Auth.SessionSecret) == "" {
+		cfg.Auth.SessionSecret = "leftshoulder-session-secret-change-me"
+	}
+	if strings.TrimSpace(cfg.Auth.CookieName) == "" {
+		cfg.Auth.CookieName = "hass_session"
 	}
 
 	return cfg, nil

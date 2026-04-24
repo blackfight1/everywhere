@@ -1,16 +1,18 @@
 <script setup>
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { routes } from './router/index.js';
 import { useAppStore } from './stores/app.js';
 import { useWebSocketStore } from './stores/websocket.js';
 import { useToastStore } from './stores/toast.js';
+import { useAuthStore } from './stores/auth.js';
 
 const router = useRouter();
 const route = useRoute();
 const app = useAppStore();
 const ws = useWebSocketStore();
 const toast = useToastStore();
+const auth = useAuthStore();
 
 const routeCopy = {
   dashboard: 'Recent activity, active scans, and callback pressure.',
@@ -23,21 +25,44 @@ const routeCopy = {
 
 const activeLabel = computed(() => route.meta?.title || 'Dashboard');
 const activeCopy = computed(() => routeCopy[route.name] || 'Operate the scanner from a single control surface.');
-const navItems = computed(() => routes.filter((item) => item.name !== 'debug'));
+const navItems = computed(() => routes.filter((item) => !item.meta?.public && item.name !== 'debug'));
+const showShell = computed(() => !route.meta?.public);
 
 onMounted(async () => {
-  await app.refreshAll();
-  ws.connect();
+  if (!auth.checked) {
+    await auth.checkSession();
+  }
+  if (auth.authenticated) {
+    await app.refreshAll();
+    ws.connect();
+  }
   ws.onMessage((msg) => app.handleWsMessage(msg));
 });
 
 function navTo(name) {
   router.push({ name });
 }
+
+async function signOut() {
+  await auth.logout();
+  ws.disconnect();
+  router.push({ name: 'login' });
+}
+
+watch(() => auth.authenticated, async (value) => {
+  if (value) {
+    await app.refreshAll();
+    ws.connect();
+    return;
+  }
+  ws.disconnect();
+});
 </script>
 
 <template>
-  <div class="shell">
+  <router-view v-if="!showShell" />
+
+  <div v-else class="shell">
     <aside class="sidebar">
       <div class="sidebar-brand" @click="navTo('dashboard')">
         <span class="brand-mark">HS</span>
@@ -61,6 +86,10 @@ function navTo(name) {
 
       <div class="sidebar-summary">
         <div class="summary-row">
+          <span>Session</span>
+          <strong>{{ auth.username || 'authenticated' }}</strong>
+        </div>
+        <div class="summary-row">
           <span>WebSocket</span>
           <strong :class="['status-inline', ws.connected ? 'is-online' : 'is-offline']">
             {{ ws.connected ? 'online' : 'offline' }}
@@ -74,6 +103,7 @@ function navTo(name) {
           <span>Pingbacks</span>
           <strong>{{ app.stats.pingback_count || 0 }}</strong>
         </div>
+        <button class="ghost-button" @click="signOut">Sign out</button>
       </div>
     </aside>
 

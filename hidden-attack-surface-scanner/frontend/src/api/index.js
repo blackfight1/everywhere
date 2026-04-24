@@ -6,7 +6,7 @@ async function request(path, options = {}) {
         headers['Content-Type'] = 'application/json';
     }
 
-    const res = await fetch(`${BASE}${path}`, { ...options, headers });
+    const res = await fetch(`${BASE}${path}`, { credentials: 'same-origin', ...options, headers });
     if (!res.ok) {
         const raw = await res.text();
         let msg = `Request failed: ${res.status}`;
@@ -14,7 +14,9 @@ async function request(path, options = {}) {
             const parsed = JSON.parse(raw);
             msg = parsed.error || msg;
         } catch { /* ignore */ }
-        throw new Error(msg);
+        const err = new Error(msg);
+        err.status = res.status;
+        throw err;
     }
 
     const ct = res.headers.get('content-type') || '';
@@ -23,6 +25,11 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+    // Auth
+    getSession: () => request('/api/auth/session'),
+    login: (username, password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+    logout: () => request('/api/auth/logout', { method: 'POST' }),
+
     // Stats
     getStats: () => request('/api/stats'),
 

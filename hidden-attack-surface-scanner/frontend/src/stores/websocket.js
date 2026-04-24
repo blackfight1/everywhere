@@ -7,6 +7,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     const maxLogs = 2000;
     let ws = null;
     let reconnectTimer = null;
+    let shouldReconnect = false;
     const listeners = new Set();
 
     function addLog(level, message, meta = {}) {
@@ -25,6 +26,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
     function connect() {
         if (ws && ws.readyState <= 1) return;
+        shouldReconnect = true;
 
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         ws = new WebSocket(`${protocol}://${window.location.host}/api/ws`);
@@ -63,8 +65,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
         ws.onclose = () => {
             connected.value = false;
-            addLog('warn', 'WebSocket disconnected, reconnecting in 3s...');
-            scheduleReconnect();
+            if (shouldReconnect) {
+                addLog('warn', 'WebSocket disconnected, reconnecting in 3s...');
+                scheduleReconnect();
+            }
         };
 
         ws.onerror = () => {
@@ -73,11 +77,24 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
 
     function scheduleReconnect() {
-        if (reconnectTimer) return;
+        if (!shouldReconnect || reconnectTimer) return;
         reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             connect();
         }, 3000);
+    }
+
+    function disconnect() {
+        shouldReconnect = false;
+        connected.value = false;
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        if (ws) {
+            try { ws.close(); } catch { /* ignore */ }
+            ws = null;
+        }
     }
 
     function onMessage(fn) {
@@ -89,5 +106,5 @@ export const useWebSocketStore = defineStore('websocket', () => {
         logs.value = [];
     }
 
-    return { connected, logs, connect, onMessage, clearLogs, addLog };
+    return { connected, logs, connect, disconnect, onMessage, clearLogs, addLog };
 });

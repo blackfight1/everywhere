@@ -32,26 +32,34 @@ func NewRouter(db *gorm.DB, cfg *appconfig.Config, engine *scanner.Engine, hub *
 
 	api := router.Group("/api")
 	{
-		api.POST("/scan", server.createScan)
-		api.GET("/scans", server.listScans)
-		api.GET("/scan/:id", server.getScan)
-		api.POST("/scan/:id/stop", server.stopScan)
-		api.GET("/scan/:id/results", server.getScanResults)
-		api.DELETE("/scan/:id", server.deleteScan)
+		api.GET("/auth/session", server.getSession)
+		api.POST("/auth/login", server.login)
+		api.POST("/auth/logout", server.logout)
 
-		api.GET("/payloads", server.listPayloads)
-		api.PUT("/payloads", server.updatePayloads)
-		api.PUT("/payloads/:id", server.updatePayload)
-		api.POST("/payloads/import", server.importPayloads)
-		api.GET("/payloads/export", server.exportPayloads)
+		private := api.Group("")
+		private.Use(server.authRequired())
+		{
+			private.POST("/scan", server.createScan)
+			private.GET("/scans", server.listScans)
+			private.GET("/scan/:id", server.getScan)
+			private.POST("/scan/:id/stop", server.stopScan)
+			private.GET("/scan/:id/results", server.getScanResults)
+			private.DELETE("/scan/:id", server.deleteScan)
 
-		api.GET("/pingbacks", server.listPingbacks)
-		api.GET("/pingbacks/:id", server.getPingback)
-		api.GET("/stats", server.getStats)
-		api.GET("/settings", server.getSettings)
-		api.PUT("/settings", server.updateSettings)
-		api.POST("/settings/notification/test", server.testNotification)
-		api.GET("/ws", server.handleWS)
+			private.GET("/payloads", server.listPayloads)
+			private.PUT("/payloads", server.updatePayloads)
+			private.PUT("/payloads/:id", server.updatePayload)
+			private.POST("/payloads/import", server.importPayloads)
+			private.GET("/payloads/export", server.exportPayloads)
+
+			private.GET("/pingbacks", server.listPingbacks)
+			private.GET("/pingbacks/:id", server.getPingback)
+			private.GET("/stats", server.getStats)
+			private.GET("/settings", server.getSettings)
+			private.PUT("/settings", server.updateSettings)
+			private.POST("/settings/notification/test", server.testNotification)
+			private.GET("/ws", server.handleWS)
+		}
 	}
 
 	return router

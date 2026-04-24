@@ -28,3 +28,9 @@ notification:
   enabled: false
   feishu_webhook: ""
   frontend_base_url: ""
+
+auth:
+  username: "leftshoulder"
+  password: "yy233966"
+  session_secret: "leftshoulder-session-secret-change-me"
+  cookie_name: "hass_session"
