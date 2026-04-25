@@ -27,6 +27,7 @@ const activeLabel = computed(() => route.meta?.title || 'Dashboard');
 const activeCopy = computed(() => routeCopy[route.name] || 'Operate the scanner from a single control surface.');
 const navItems = computed(() => routes.filter((item) => !item.meta?.public && item.name !== 'debug'));
 const showShell = computed(() => !route.meta?.public);
+const booting = computed(() => !auth.checked);
 
 onMounted(async () => {
   if (!auth.checked) {
@@ -60,7 +61,15 @@ watch(() => auth.authenticated, async (value) => {
 </script>
 
 <template>
-  <router-view v-if="!showShell" />
+  <div v-if="booting" class="boot-shell">
+    <section class="boot-panel">
+      <span class="page-kicker">Session Check</span>
+      <h1 class="boot-title">Hidden Surface Scanner</h1>
+      <p class="page-copy">Checking the current session and preparing the workspace.</p>
+    </section>
+  </div>
+
+  <router-view v-else-if="!showShell" />
 
   <div v-else class="shell">
     <aside class="sidebar">
@@ -152,3 +161,9 @@ watch(() => auth.authenticated, async (value) => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.boot-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.boot-panel { width: min(460px, 100%); padding: 34px; border-radius: 28px; border: 1px solid rgba(49,80,109,.42); background: linear-gradient(180deg, rgba(17,25,34,.96), rgba(10,15,21,.96)); box-shadow: 0 22px 70px rgba(0,0,0,.35); }
+.boot-title { margin: 10px 0 0; font-size: clamp(2rem, 5vw, 2.8rem); letter-spacing: -.05em; }
+</style>

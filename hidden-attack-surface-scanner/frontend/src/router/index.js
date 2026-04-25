@@ -10,6 +10,7 @@ const routes = [
     { path: '/results', name: 'results', component: () => import('../views/Results.vue'), meta: { title: 'Results', icon: 'RS' } },
     { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue'), meta: { title: 'Settings', icon: 'CF' } },
     { path: '/debug', name: 'debug', component: () => import('../views/Debug.vue'), meta: { title: 'Debug Log', icon: 'LG' } },
+    { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: (to) => ({ name: 'login', query: { redirect: to.fullPath } }), meta: { public: true } },
 ];
 
 const router = createRouter({
