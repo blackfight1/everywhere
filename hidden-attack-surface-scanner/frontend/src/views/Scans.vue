@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, onMounted, computed } from 'vue';
+import { reactive, ref, onMounted, computed, watch } from 'vue';
 import { api } from '../api/index.js';
 import { useAppStore } from '../stores/app.js';
 import { useToastStore } from '../stores/toast.js';
@@ -13,7 +13,9 @@ const router = useRouter();
 const showForm = ref(true);
 const submitting = ref(false);
 const confirmDelete = ref(null);
+const confirmBatchDelete = ref(false);
 const selectedLogScan = ref('');
+const selectedScanIds = ref([]);
 
 const form = reactive({
   targets: '',
@@ -48,12 +50,28 @@ const modeDescriptions = {
   full: 'Every enabled payload in the Payload workspace. Use after quick mode identifies promising targets.',
 };
 
+const finishedStatuses = new Set(['completed', 'failed', 'stopped']);
+
 const queueStats = computed(() => ({
   total: app.scans.length,
   running: app.scans.filter((scan) => scan.status === 'running').length,
   waiting: app.scans.filter((scan) => scan.status === 'waiting_callback').length,
   hits: app.scans.filter((scan) => (scan.pingback_count || 0) > 0).length,
+  finished: app.scans.filter((scan) => finishedStatuses.has(scan.status)).length,
 }));
+
+const batchDeletableScanIDs = computed(() =>
+  app.scans.filter((scan) => finishedStatuses.has(scan.status)).map((scan) => scan.id),
+);
+
+const selectedBatchDeleteIDs = computed(() =>
+  selectedScanIds.value.filter((id) => batchDeletableScanIDs.value.includes(id)),
+);
+
+const allFinishedSelected = computed(() =>
+  batchDeletableScanIDs.value.length > 0 &&
+  selectedBatchDeleteIDs.value.length === batchDeletableScanIDs.value.length,
+);
 
 const activeLogs = computed(() => {
   const selected = selectedLogScan.value;
@@ -62,6 +80,14 @@ const activeLogs = computed(() => {
     .slice(-80)
     .reverse();
 });
+
+watch(() => app.scans, () => {
+  const liveIDs = new Set(app.scans.map((scan) => scan.id));
+  selectedScanIds.value = selectedScanIds.value.filter((id) => liveIDs.has(id));
+  if (selectedLogScan.value && !liveIDs.has(selectedLogScan.value)) {
+    selectedLogScan.value = '';
+  }
+}, { deep: true });
 
 async function startScan() {
   submitting.value = true;
@@ -117,7 +143,38 @@ async function deleteScan(id) {
     await api.deleteScan(id);
     toast.success('Scan deleted');
     confirmDelete.value = null;
+    confirmBatchDelete.value = false;
+    selectedScanIds.value = selectedScanIds.value.filter((scanID) => scanID !== id);
     if (selectedLogScan.value === id) selectedLogScan.value = '';
+    await app.refreshAll();
+  } catch (e) {
+    toast.error(e.message);
+  }
+}
+
+async function deleteSelectedScans() {
+  if (!selectedBatchDeleteIDs.value.length) {
+    toast.error('Select at least one finished scan');
+    return;
+  }
+
+  try {
+    const result = await api.deleteScans(selectedBatchDeleteIDs.value);
+    const deletedIDs = Array.isArray(result.deleted_ids) ? result.deleted_ids : [];
+    const skippedCount = Number(result.skipped_count || 0);
+
+    selectedScanIds.value = selectedScanIds.value.filter((id) => !deletedIDs.includes(id));
+    if (selectedLogScan.value && deletedIDs.includes(selectedLogScan.value)) {
+      selectedLogScan.value = '';
+    }
+    confirmBatchDelete.value = false;
+    confirmDelete.value = null;
+
+    if (deletedIDs.length && skippedCount) {
+      toast.success(`Deleted ${deletedIDs.length} finished scan(s), skipped ${skippedCount}.`);
+    } else {
+      toast.success(`Deleted ${deletedIDs.length} finished scan(s).`);
+    }
     await app.refreshAll();
   } catch (e) {
     toast.error(e.message);
@@ -135,6 +192,35 @@ function openDebug(id) {
 
 function selectLogScan(id) {
   selectedLogScan.value = selectedLogScan.value === id ? '' : id;
+}
+
+function toggleScanSelection(id) {
+  if (selectedScanIds.value.includes(id)) {
+    selectedScanIds.value = selectedScanIds.value.filter((scanID) => scanID !== id);
+    return;
+  }
+  selectedScanIds.value = [...selectedScanIds.value, id];
+}
+
+function toggleAllFinishedScans() {
+  if (allFinishedSelected.value) {
+    selectedScanIds.value = selectedScanIds.value.filter((id) => !batchDeletableScanIDs.value.includes(id));
+    return;
+  }
+  selectedScanIds.value = Array.from(new Set([...selectedScanIds.value, ...batchDeletableScanIDs.value]));
+}
+
+function clearSelectedScans() {
+  selectedScanIds.value = [];
+  confirmBatchDelete.value = false;
+}
+
+function isScanSelected(id) {
+  return selectedScanIds.value.includes(id);
+}
+
+function isFinishedScan(scan) {
+  return finishedStatuses.has(scan.status);
 }
 
 function statusClass(status) {
@@ -185,12 +271,13 @@ function trimText(value, max = 72) {
         <div class="stat-block"><span>Total jobs</span><strong>{{ queueStats.total }}</strong></div>
         <div class="stat-block"><span>Running</span><strong>{{ queueStats.running }}</strong></div>
         <div class="stat-block"><span>Waiting callback</span><strong>{{ queueStats.waiting }}</strong></div>
-        <div class="stat-block"><span>Jobs with hits</span><strong>{{ queueStats.hits }}</strong></div>
+        <div class="stat-block"><span>Finished</span><strong>{{ queueStats.finished }}</strong></div>
       </div>
 
       <div class="hint-strip" style="margin-top: 18px">
         <span><code>Quick</code> is the default fleet-wide mode for all targets</span>
         <span>Use <code>batch_size</code> to cap each dispatch wave at roughly <code>1500</code> hosts</span>
+        <span>Batch delete only targets <code>completed</code>, <code>failed</code>, and <code>stopped</code> jobs</span>
       </div>
 
       <div v-if="showForm" class="form-grid" style="margin-top: 18px">
@@ -217,13 +304,29 @@ function trimText(value, max = 72) {
           <h2>Scan queue</h2>
           <p>Track batch dispatch, current target, target completion, request volume, and callback hits from one table.</p>
         </div>
+        <div class="inline-actions">
+          <button class="ghost-button" @click="toggleAllFinishedScans()">{{ allFinishedSelected ? 'Unselect finished' : 'Select finished' }}</button>
+          <button class="ghost-button" :disabled="!selectedScanIds.length" @click="clearSelectedScans">Clear selection</button>
+          <button v-if="confirmBatchDelete" class="btn-danger" :disabled="!selectedBatchDeleteIDs.length" @click="deleteSelectedScans">Confirm delete {{ selectedBatchDeleteIDs.length }}</button>
+          <button v-else class="ghost-button" :disabled="!selectedBatchDeleteIDs.length" @click="confirmBatchDelete = true">Delete selected {{ selectedBatchDeleteIDs.length }}</button>
+        </div>
       </div>
 
       <div class="table-shell" v-if="app.scans.length">
         <table>
-          <thead><tr><th>ID</th><th>Status</th><th>Mode</th><th>Batch</th><th>Targets</th><th>Requests</th><th>Current</th><th>Pingbacks</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th class="fit"><input :checked="allFinishedSelected" type="checkbox" @change="toggleAllFinishedScans" /></th><th>ID</th><th>Status</th><th>Mode</th><th>Batch</th><th>Targets</th><th>Requests</th><th>Current</th><th>Pingbacks</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody>
             <tr v-for="scan in app.scans" :key="scan.id" :class="{ selected: selectedLogScan === scan.id }" @click="selectLogScan(scan.id)">
+              <td class="fit">
+                <input
+                  v-if="isFinishedScan(scan)"
+                  :checked="isScanSelected(scan.id)"
+                  type="checkbox"
+                  @click.stop
+                  @change="toggleScanSelection(scan.id)"
+                />
+                <span v-else class="muted">-</span>
+              </td>
               <td class="mono">{{ shortId(scan.id) }}</td>
               <td><span :class="statusClass(scan.status)">{{ scan.status }}</span></td>
               <td>{{ scan.mode }}</td>

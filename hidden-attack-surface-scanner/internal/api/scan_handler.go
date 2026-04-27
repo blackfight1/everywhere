@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"hidden-attack-surface-scanner/internal/database"
@@ -10,6 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+type batchDeleteScanRequest struct {
+	IDs []string `json:"ids"`
+}
 
 func (s *Server) createScan(c *gin.Context) {
 	var req scanner.StartScanRequest
@@ -62,28 +67,126 @@ func (s *Server) getScanResults(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+func (s *Server) deleteScans(c *gin.Context) {
+	var req batchDeleteScanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ids := normalizeScanIDs(req.IDs)
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids cannot be empty"})
+		return
+	}
+
+	var tasks []database.ScanTask
+	if err := s.db.Select("id", "status").Where("id IN ?", ids).Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	statusByID := make(map[string]string, len(tasks))
+	for _, task := range tasks {
+		statusByID[task.ID] = task.Status
+	}
+
+	deletable := make([]string, 0, len(ids))
+	skipped := make([]gin.H, 0)
+	for _, id := range ids {
+		status, ok := statusByID[id]
+		if !ok {
+			skipped = append(skipped, gin.H{"id": id, "reason": "not_found"})
+			continue
+		}
+		if !isFinishedScanStatus(status) {
+			skipped = append(skipped, gin.H{"id": id, "reason": "status_" + strings.ToLower(strings.TrimSpace(status))})
+			continue
+		}
+		deletable = append(deletable, id)
+	}
+
+	if len(deletable) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":         "no finished scans selected for deletion",
+			"skipped":       skipped,
+			"skipped_count": len(skipped),
+		})
+		return
+	}
+
+	if err := s.deleteScanRecords(deletable); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"deleted_ids":   deletable,
+		"deleted_count": len(deletable),
+		"skipped":       skipped,
+		"skipped_count": len(skipped),
+		"deleted_at":    time.Now().UTC(),
+	})
+}
+
 func (s *Server) deleteScan(c *gin.Context) {
 	taskID := c.Param("id")
-	_ = s.engine.StopScan(taskID)
-
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Delete(&database.NotificationState{}, "scan_task_id = ?", taskID).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&database.Pingback{}, "scan_task_id = ?", taskID).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&database.SentPayload{}, "scan_task_id = ?", taskID).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&database.ScanTask{}, "id = ?", taskID).Error; err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
+	if err := s.deleteScanRecords([]string{taskID}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"deleted_at": time.Now().UTC()})
+}
+
+func (s *Server) deleteScanRecords(ids []string) error {
+	ids = normalizeScanIDs(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	for _, id := range ids {
+		_ = s.engine.StopScan(id)
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&database.NotificationState{}, "scan_task_id IN ?", ids).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&database.Pingback{}, "scan_task_id IN ?", ids).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&database.SentPayload{}, "scan_task_id IN ?", ids).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&database.ScanTask{}, "id IN ?", ids).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func normalizeScanIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	normalized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, id)
+	}
+	return normalized
+}
+
+func isFinishedScanStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "failed", "stopped":
+		return true
+	default:
+		return false
+	}
 }

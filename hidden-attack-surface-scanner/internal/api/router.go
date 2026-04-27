@@ -41,6 +41,7 @@ func NewRouter(db *gorm.DB, cfg *appconfig.Config, engine *scanner.Engine, hub *
 		{
 			private.POST("/scan", server.createScan)
 			private.GET("/scans", server.listScans)
+			private.DELETE("/scans", server.deleteScans)
 			private.GET("/scan/:id", server.getScan)
 			private.POST("/scan/:id/stop", server.stopScan)
 			private.GET("/scan/:id/results", server.getScanResults)

@@ -155,25 +155,25 @@ payloads:
     value: "https://%s/"
     group: standard
     comment: "Ref parameter"
-  - active: false
+  - active: true
     type: raw
     key: absolute-url-host-mismatch
     value: "GET https://%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
     group: cracking_the_lens
     comment: "Absolute URL and Host mismatch"
-  - active: false
+  - active: true
     type: raw
     key: duplicate-host
     value: "Host: {host}\\r\\nHost: %s"
     group: cracking_the_lens
     comment: "Duplicate Host header"
-  - active: false
+  - active: true
     type: raw
     key: host-with-at
     value: "Host: %s@{host}"
     group: cracking_the_lens
     comment: "userinfo parser confusion"
-  - active: false
+  - active: true
     type: raw
     key: host-at-reversed
     value: "Host: {host}@%s"
@@ -209,13 +209,13 @@ payloads:
     value: "GET /%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
     group: cracking_the_lens
     comment: "Path slash prefix"
-  - active: false
+  - active: true
     type: raw
     key: sni-host-mismatch
     value: "sni=%s,host={host}"
     group: cracking_the_lens
     comment: "SNI to OOB, Host to target"
-  - active: false
+  - active: true
     type: raw
     key: sni-host-mismatch-reversed
     value: "sni={host},host=%s"

@@ -35,6 +35,7 @@ export const api = {
 
     // Scans
     listScans: () => request('/api/scans'),
+    deleteScans: (ids) => request('/api/scans', { method: 'DELETE', body: JSON.stringify({ ids }) }),
     getScan: (id) => request(`/api/scan/${id}`),
     createScan: (data) => request('/api/scan', { method: 'POST', body: JSON.stringify(data) }),
     stopScan: (id) => request(`/api/scan/${id}/stop`, { method: 'POST' }),
