@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -153,6 +154,50 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func Save(path string, cfg Config) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("config path is empty")
+	}
+
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config yaml: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(dir, ".config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tempPath := tempFile.Name()
+	cleanup := func() {
+		_ = os.Remove(tempPath)
+	}
+
+	if _, err := tempFile.Write(data); err != nil {
+		_ = tempFile.Close()
+		cleanup()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Chmod(tempPath, 0o600); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		cleanup()
+		return fmt.Errorf("replace config file: %w", err)
+	}
+	return nil
 }
 
 func (c Config) PostgresDSN() string {

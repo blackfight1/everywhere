@@ -19,11 +19,11 @@ services:
       timeout: 3s
       retries: 10
 
-  backend:
+  scanner:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: hass-backend
+    container_name: everywhere-cli
     restart: unless-stopped
     depends_on:
       postgres:
@@ -36,21 +36,20 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-changeme}
       INTERACTSH_SERVER: ${INTERACTSH_SERVER:-}
       INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:-}
-    ports:
-      - "127.0.0.1:8081:8080"
+    stdin_open: true
+    tty: true
     volumes:
-      - ./configs:/app/configs
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: hass-frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "8082:80"
+      - ./configs:/app/configs:ro
+      - /opt/everywhere-data:/data
+    command: [
+      "-config", "/data/config.yaml",
+      "-payloads", "/app/configs/injections.yaml",
+      "-targets-file", "/data/targets.txt",
+      "-mode", "quick",
+      "-batch-size", "1500",
+      "-rate-limit", "20",
+      "-callback-timeout", "1440"
+    ]
 
 volumes:
   pg_data:

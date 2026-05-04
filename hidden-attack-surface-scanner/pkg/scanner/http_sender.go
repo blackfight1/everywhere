@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"hidden-attack-surface-scanner/pkg/payload"
@@ -50,6 +49,11 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
+		// Do not follow redirects automatically. For Host/path mismatch probes this
+		// can create self-triggered OOB traffic that looks like a valid finding.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}, nil
 }
 
@@ -70,12 +74,6 @@ func BuildStandardRequest(
 	}
 	for _, item := range payloads {
 		switch item.Type {
-		case payload.TypeHeader:
-			if strings.EqualFold(item.Key, "Host") {
-				req.Host = item.ResolvedValue
-				continue
-			}
-			req.Header.Set(item.Key, item.ResolvedValue)
 		case payload.TypeParam:
 			query := req.URL.Query()
 			query.Set(item.Key, item.ResolvedValue)

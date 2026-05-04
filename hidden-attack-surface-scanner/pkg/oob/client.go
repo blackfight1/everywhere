@@ -3,6 +3,7 @@ package oob
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -101,8 +102,44 @@ func (c *Client) RememberOwnIP(remote string) {
 	c.ownIPs.Store(remote, true)
 }
 
+func (c *Client) RememberOwnIPs(remotes ...string) int {
+	added := 0
+	for _, remote := range remotes {
+		remote = normalizeIP(remote)
+		if remote == "" {
+			continue
+		}
+		if _, loaded := c.ownIPs.LoadOrStore(remote, true); !loaded {
+			added++
+		}
+	}
+	return added
+}
+
+func (c *Client) RememberLocalInterfaceIPs() int {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return 0
+	}
+
+	candidates := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		switch value := addr.(type) {
+		case *net.IPNet:
+			if ip := candidateOwnIP(value.IP); ip != "" {
+				candidates = append(candidates, ip)
+			}
+		case *net.IPAddr:
+			if ip := candidateOwnIP(value.IP); ip != "" {
+				candidates = append(candidates, ip)
+			}
+		}
+	}
+	return c.RememberOwnIPs(candidates...)
+}
+
 func (c *Client) IsOwnIP(remote string) bool {
-	_, ok := c.ownIPs.Load(remote)
+	_, ok := c.ownIPs.Load(normalizeIP(remote))
 	return ok
 }
 
@@ -114,4 +151,19 @@ func (c *Client) Stop() error {
 		return fmt.Errorf("close client: %w", err)
 	}
 	return nil
+}
+
+func candidateOwnIP(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	ip = ip.To16()
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+		return ""
+	}
+	return normalizeIP(ip.String())
+}
+
+func normalizeIP(value string) string {
+	return strings.TrimSpace(strings.Trim(value, "[]"))
 }

@@ -11,6 +11,8 @@ type ScanTask struct {
 	ID                string    `json:"id" gorm:"primaryKey;size:36"`
 	Status            string    `json:"status" gorm:"index"`
 	Mode              string    `json:"mode"`
+	TargetSetID       string    `json:"target_set_id" gorm:"index"`
+	TargetSetName     string    `json:"target_set_name"`
 	Config            string    `json:"config" gorm:"type:text"`
 	TargetCount       int       `json:"target_count"`
 	EstimatedRequests int       `json:"estimated_requests"`
@@ -111,4 +113,67 @@ type NotificationState struct {
 	LastNotifiedAt    time.Time `json:"last_notified_at" gorm:"index"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type TargetSet struct {
+	ID           string    `json:"id" gorm:"primaryKey;size:36"`
+	Name         string    `json:"name" gorm:"index"`
+	SourceType   string    `json:"source_type" gorm:"index"`
+	Status       string    `json:"status" gorm:"index"`
+	RawCount     int       `json:"raw_count"`
+	ValidCount   int       `json:"valid_count"`
+	DedupedCount int       `json:"deduped_count"`
+	InvalidCount int       `json:"invalid_count"`
+	LastError    string    `json:"last_error" gorm:"type:text"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (t *TargetSet) BeforeCreate(_ *gorm.DB) error {
+	if t.ID == "" {
+		t.ID = uuid.NewString()
+	}
+	return nil
+}
+
+type TargetRecord struct {
+	ID          string    `json:"id" gorm:"primaryKey;size:36"`
+	TargetSetID string    `json:"target_set_id" gorm:"index;uniqueIndex:idx_target_set_url,priority:1"`
+	URL         string    `json:"url" gorm:"type:text;uniqueIndex:idx_target_set_url,priority:2"`
+	Scheme      string    `json:"scheme" gorm:"index"`
+	Host        string    `json:"host" gorm:"index"`
+	Port        int       `json:"port"`
+	Path        string    `json:"path" gorm:"type:text"`
+	Position    int       `json:"position" gorm:"index"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+func (t *TargetRecord) BeforeCreate(_ *gorm.DB) error {
+	if t.ID == "" {
+		t.ID = uuid.NewString()
+	}
+	return nil
+}
+
+type TargetImportJob struct {
+	ID             string    `json:"id" gorm:"primaryKey;size:36"`
+	TargetSetID    string    `json:"target_set_id" gorm:"index"`
+	Filename       string    `json:"filename"`
+	Status         string    `json:"status" gorm:"index"`
+	TotalLines     int       `json:"total_lines"`
+	ProcessedLines int       `json:"processed_lines"`
+	ValidCount     int       `json:"valid_count"`
+	DedupedCount   int       `json:"deduped_count"`
+	InvalidCount   int       `json:"invalid_count"`
+	LastError      string    `json:"last_error" gorm:"type:text"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	CompletedAt    time.Time `json:"completed_at"`
+}
+
+func (t *TargetImportJob) BeforeCreate(_ *gorm.DB) error {
+	if t.ID == "" {
+		t.ID = uuid.NewString()
+	}
+	return nil
 }

@@ -90,6 +90,7 @@ func (e *Engine) maybeNotifyFinding(pingback database.Pingback) {
 		log.Printf("send feishu notification failed finding=%s err=%v response=%s", findingKey, err, response)
 		return
 	}
+	log.Printf("feishu notification sent finding=%s confidence=%s evidence=%s response=%s", findingKey, confidence, evidence, response)
 
 	record := database.NotificationState{
 		FindingKey:        findingKey,
