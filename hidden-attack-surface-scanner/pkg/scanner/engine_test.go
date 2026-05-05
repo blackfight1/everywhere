@@ -7,13 +7,12 @@ import (
 	"hidden-attack-surface-scanner/pkg/payload"
 )
 
-func TestEstimateTotalRequestsIgnoresHeaderPayloads(t *testing.T) {
+func TestEstimateTotalRequestsOnlyCountsRawPayloads(t *testing.T) {
 	total := estimateTotalRequests(StartScanRequest{
 		Targets: []string{"https://example.com"},
 	}, []payload.Payload{
-		{Type: payload.TypeHeader, Key: "Referer"},
-		{Type: payload.TypeParam, Key: "url"},
 		{Type: payload.TypeRaw, Key: "duplicate-host"},
+		{Type: payload.TypeRaw, Key: "host-with-at"},
 	}, 1)
 
 	if total != 2 {
@@ -21,49 +20,42 @@ func TestEstimateTotalRequestsIgnoresHeaderPayloads(t *testing.T) {
 	}
 }
 
-func TestSelectPayloadsForModeQuickOnlyIncludesHighValueRaw(t *testing.T) {
+func TestEstimateTotalRequestsExpandsProxyUnsafeVariants(t *testing.T) {
+	total := estimateTotalRequests(StartScanRequest{
+		Targets: []string{"https://example.com"},
+	}, []payload.Payload{
+		{Type: payload.TypeRaw, Key: "duplicate-host"},
+		{Type: payload.TypeRaw, Key: proxyLocalSSHPayloadKey},
+	}, 1)
+
+	want := 1 + len(proxyUnsafeVariants())
+	if total != want {
+		t.Fatalf("estimateTotalRequests() = %d, want %d", total, want)
+	}
+}
+
+func TestSelectPayloadsForModeOnlyIncludesActiveRaw(t *testing.T) {
 	items := []payload.Payload{
-		{Active: true, Group: "standard", Type: payload.TypeParam, Key: "url"},
-		{Active: true, Group: "standard", Type: payload.TypeHeader, Key: "Referer"},
 		{Active: true, Group: "cracking_the_lens", Type: payload.TypeRaw, Key: "duplicate-host"},
-		{Active: true, Group: "cracking_the_lens", Type: payload.TypeRaw, Key: "host-with-hash"},
-		{Active: false, Group: "cracking_the_lens", Type: payload.TypeRaw, Key: "sni-host-mismatch"},
+		{Active: false, Group: "cracking_the_lens", Type: payload.TypeRaw, Key: "host-at-reversed"},
 	}
 
-	selected := selectPayloadsForMode(items, scanModeQuick)
+	selected := selectPayloadsForMode(items, scanModeRaw)
 
 	if len(selected) != 1 {
-		t.Fatalf("quick payload count = %d, want 1", len(selected))
+		t.Fatalf("selected payload count = %d, want 1", len(selected))
 	}
 	if selected[0].Key != "duplicate-host" {
-		t.Fatalf("quick payloads = %#v", selected)
+		t.Fatalf("selected payloads = %#v", selected)
 	}
 }
 
-func TestSelectPayloadsForModeFullSkipsHeaderPayloads(t *testing.T) {
-	items := []payload.Payload{
-		{Active: true, Group: "standard", Type: payload.TypeHeader, Key: "Referer"},
-		{Active: true, Group: "standard", Type: payload.TypeParam, Key: "url"},
-		{Active: true, Group: "cracking_the_lens", Type: payload.TypeRaw, Key: "duplicate-host"},
-		{Active: false, Group: "cracking_the_lens", Type: payload.TypeRaw, Key: "host-with-hash"},
-	}
-
-	selected := selectPayloadsForMode(items, scanModeFull)
-
-	if len(selected) != 2 {
-		t.Fatalf("full payload count = %d, want 2", len(selected))
-	}
-	if selected[0].Type != payload.TypeParam || selected[1].Type != payload.TypeRaw {
-		t.Fatalf("full payloads = %#v", selected)
-	}
-}
-
-func TestApplyDefaultsNormalizesMode(t *testing.T) {
-	req := StartScanRequest{Mode: " FULL "}
+func TestApplyDefaultsNormalizesModeToDefault(t *testing.T) {
+	req := StartScanRequest{Mode: " full "}
 	req.applyDefaults(applyDefaultsTestConfig())
 
-	if req.Mode != scanModeFull {
-		t.Fatalf("mode = %q, want %q", req.Mode, scanModeFull)
+	if req.Mode != scanModeRaw {
+		t.Fatalf("mode = %q, want %q", req.Mode, scanModeRaw)
 	}
 }
 

@@ -1,34 +1,17 @@
 # Everywhere CLI
 
-Command-line OOB scanner for hidden HTTPS attack surface discovery, inspired by `collaborator-everywhere-v2` and `Cracking the Lens`.
+Small command-line OOB scanner for hidden HTTPS attack surface discovery.
 
-## Current Scope
+## What It Scans
 
-- No frontend
-- No REST API
-- Single CLI binary
-- PostgreSQL persistence for:
-  - scan tasks
-  - payload templates
-  - sent payloads
-  - pingbacks
-  - notification state
-- Interactsh polling and correlation
-- Feishu notifications for findings and runtime failures
+The tool now scans only 4 core raw payload types:
 
-## Supported Payload Types
+1. `absolute-url-host-mismatch`
+2. `duplicate-host`
+3. `host-with-at`
+4. `host-at-reversed`
 
-- `param`
-- `raw`
-
-The scanner no longer sends `header` payloads.
-
-## Scan Modes
-
-- `quick`
-  - sends 6 high-value raw variants only
-- `full`
-  - sends every enabled `param` and `raw` payload
+Everything else has been removed from the default workflow.
 
 ## Build
 
@@ -36,74 +19,66 @@ The scanner no longer sends `header` payloads.
 go build -o everywhere ./cmd/everywhere
 ```
 
-## Run
+## Simple Usage
 
 Single target:
 
 ```bash
-go run ./cmd/everywhere \
-  -config configs/config.yaml \
-  -payloads configs/injections.yaml \
-  -target https://example.com \
-  -mode quick
+everywhere scan -target https://example.com
 ```
 
 Target file:
 
 ```bash
-go run ./cmd/everywhere \
-  -config configs/config.yaml \
-  -payloads configs/injections.yaml \
-  -targets-file targets.txt \
-  -mode quick \
-  -batch-size 1500 \
-  -rate-limit 20 \
-  -callback-timeout 1440
+everywhere scan -targets-file targets.txt
 ```
 
 JSON summary:
 
 ```bash
-go run ./cmd/everywhere \
-  -config configs/config.yaml \
-  -payloads configs/injections.yaml \
-  -targets-file targets.txt \
-  -mode full \
-  -json-summary
+everywhere scan -targets-file targets.txt -json-summary
 ```
 
-## Main Flags
+## Useful Flags
 
 - `-target`
 - `-targets-file`
-- `-mode`
 - `-concurrency`
 - `-batch-size`
 - `-rate-limit`
 - `-callback-timeout`
 - `-proxy`
-- `-default-origin`
-- `-default-referer`
 - `-interactsh-server`
 - `-interactsh-token`
 - `-json-summary`
 
+## Defaults
+
+If you do not override them, the scanner uses:
+
+- config: `configs/config.yaml`
+- payloads: `configs/injections.yaml`
+- mode: raw-only
+
 ## Docker Compose
 
-`docker-compose.yml` now runs the CLI scanner container plus PostgreSQL.
+`docker-compose.yml` runs:
+
+- `postgres`
+- `scanner`
 
 Default container command expects:
 
 - config at `/opt/everywhere-data/config.yaml`
 - targets at `/opt/everywhere-data/targets.txt`
 
-Start it with:
+Start:
 
 ```bash
 docker compose up -d --build
 ```
 
-Follow logs with:
+Follow logs:
 
 ```bash
 docker logs -f everywhere-cli

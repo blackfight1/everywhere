@@ -8,6 +8,11 @@ import (
 	"hidden-attack-surface-scanner/pkg/payload"
 )
 
+type ProxyUnsafeVariant struct {
+	Method   string
+	Upstream string
+}
+
 func BuildCrackingRequest(targetURL string, item payload.Payload, oobURL string) (RawRequest, error) {
 	parsed, err := url.Parse(targetURL)
 	if err != nil {
@@ -74,85 +79,49 @@ func BuildCrackingRequest(targetURL string, item payload.Payload, oobURL string)
 				path, host, oobURL,
 			)),
 		}, nil
-	case "host-with-hash":
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: host,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET %s HTTP/1.1\r\nHost: %s#%s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				path, host, oobURL,
-			)),
-		}, nil
-	case "host-crlf-inject":
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: host,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET %s HTTP/1.1\r\nHost: %s\r\nX-Injected: %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				path, host, oobURL,
-			)),
-		}, nil
-	case "host-with-space":
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: host,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET %s HTTP/1.1\r\nHost: %s %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				path, host, oobURL,
-			)),
-		}, nil
-	case "path-at-prefix":
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: host,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET @%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				oobURL, path, host,
-			)),
-		}, nil
-	case "path-slash-prefix":
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: host,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET /%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				oobURL, path, host,
-			)),
-		}, nil
-	case "sni-host-mismatch":
-		if !useTLS {
-			return RawRequest{}, fmt.Errorf("sni-host-mismatch requires HTTPS target")
-		}
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: oobURL,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				path, host,
-			)),
-		}, nil
-	case "sni-host-mismatch-reversed":
-		if !useTLS {
-			return RawRequest{}, fmt.Errorf("sni-host-mismatch-reversed requires HTTPS target")
-		}
-		return RawRequest{
-			Address: address,
-			UseTLS:  useTLS,
-			SNIHost: host,
-			RawBytes: []byte(fmt.Sprintf(
-				"GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
-				path, oobURL,
-			)),
-		}, nil
 	default:
 		return RawRequest{}, fmt.Errorf("unsupported raw payload: %s", item.Key)
 	}
+}
+
+func BuildProxyUnsafeRequest(targetURL string, variant ProxyUnsafeVariant) (RawRequest, error) {
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return RawRequest{}, err
+	}
+
+	host := parsed.Hostname()
+	port := parsed.Port()
+	useTLS := strings.EqualFold(parsed.Scheme, "https")
+	if port == "" {
+		if useTLS {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+
+	address := netJoinHostPort(host, port)
+	method := strings.ToUpper(strings.TrimSpace(variant.Method))
+	upstream := strings.TrimSpace(variant.Upstream)
+	if method == "" || upstream == "" {
+		return RawRequest{}, fmt.Errorf("invalid proxy-local-ssh variant")
+	}
+
+	requestLineTarget := "http://" + upstream
+	if method == "CONNECT" {
+		requestLineTarget = upstream
+	}
+
+	return RawRequest{
+		Address: address,
+		UseTLS:  useTLS,
+		SNIHost: host,
+		RawBytes: []byte(fmt.Sprintf(
+			"%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nCache-Control: no-transform\r\n\r\n",
+			method, requestLineTarget, host,
+		)),
+	}, nil
 }
 
 func netJoinHostPort(host string, port string) string {

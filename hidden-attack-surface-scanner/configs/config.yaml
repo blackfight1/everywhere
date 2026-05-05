@@ -25,8 +25,8 @@ own_ip:
   action: "mark"
 
 notification:
-  enabled: false
-  feishu_webhook: ""
+  enabled: true
+  feishu_webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/1f130940-c40e-4a22-86d5-aecdd782b9bf"
   frontend_base_url: ""
 
 auth:

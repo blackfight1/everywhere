@@ -3,13 +3,10 @@ package scanner
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
-
-	"hidden-attack-surface-scanner/pkg/payload"
 
 	xproxy "golang.org/x/net/proxy"
 )
@@ -49,50 +46,8 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
-		// Do not follow redirects automatically. For Host/path mismatch probes this
-		// can create self-triggered OOB traffic that looks like a valid finding.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}, nil
-}
-
-func BuildStandardRequest(
-	ctx context.Context,
-	target string,
-	payloads []payload.ResolvedPayload,
-	customHeaders map[string]string,
-) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Cache-Control", "no-transform")
-	for key, value := range customHeaders {
-		req.Header.Set(key, value)
-	}
-	for _, item := range payloads {
-		switch item.Type {
-		case payload.TypeParam:
-			query := req.URL.Query()
-			query.Set(item.Key, item.ResolvedValue)
-			req.URL.RawQuery = query.Encode()
-		}
-	}
-
-	return req, nil
-}
-
-func SendPreparedRequest(httpClient *http.Client, req *http.Request) (int, error) {
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
-
-	return resp.StatusCode, nil
 }

@@ -18,6 +18,7 @@ type ScanTask struct {
 	EstimatedRequests int       `json:"estimated_requests"`
 	RequestSent       int       `json:"request_sent"`
 	PingbackCount     int       `json:"pingback_count"`
+	ResponseHitCount  int       `json:"response_hit_count"`
 	BatchSize         int       `json:"batch_size"`
 	BatchCount        int       `json:"batch_count"`
 	CurrentBatch      int       `json:"current_batch"`
@@ -95,6 +96,34 @@ type Pingback struct {
 func (p *Pingback) BeforeCreate(_ *gorm.DB) error {
 	if p.ID == "" {
 		p.ID = uuid.NewString()
+	}
+	return nil
+}
+
+type ResponseFinding struct {
+	ID                  string    `json:"id" gorm:"primaryKey;size:36"`
+	ScanTaskID          string    `json:"scan_task_id" gorm:"index"`
+	TargetURL           string    `json:"target_url" gorm:"index"`
+	PayloadType         string    `json:"payload_type" gorm:"index"`
+	PayloadKey          string    `json:"payload_key" gorm:"index"`
+	VariantKey          string    `json:"variant_key" gorm:"index"`
+	RequestMethod       string    `json:"request_method"`
+	RequestURL          string    `json:"request_url" gorm:"type:text"`
+	RawRequest          string    `json:"raw_request" gorm:"type:text"`
+	ReplayCommand       string    `json:"replay_command" gorm:"type:text"`
+	ResponseStatus      *int      `json:"response_status"`
+	ResponseHeaders     string    `json:"response_headers" gorm:"type:text"`
+	ResponseBodyExcerpt string    `json:"response_body_excerpt" gorm:"type:text"`
+	MatcherName         string    `json:"matcher_name"`
+	Severity            string    `json:"severity" gorm:"index"`
+	Confidence          string    `json:"confidence" gorm:"index"`
+	Upstream            string    `json:"upstream"`
+	CreatedAt           time.Time `json:"created_at" gorm:"index"`
+}
+
+func (r *ResponseFinding) BeforeCreate(_ *gorm.DB) error {
+	if r.ID == "" {
+		r.ID = uuid.NewString()
 	}
 	return nil
 }

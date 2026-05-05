@@ -47,6 +47,22 @@ type ScanErrorAlert struct {
 	ConfigPreview    string
 }
 
+type ScanLifecycleAlert struct {
+	Title            string
+	NotificationKind string
+	Severity         string
+	ScanTaskID       string
+	Mode             string
+	TargetCount      int
+	RequestSent      int
+	PingbackCount    int
+	ResponseHits     int
+	Status           string
+	OccurredAt       time.Time
+	ResultsURL       string
+	Summary          string
+}
+
 type webhookResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
@@ -136,6 +152,48 @@ func SendFeishuScanErrorCard(ctx context.Context, webhook string, alert ScanErro
 	return result, nil
 }
 
+func SendFeishuLifecycleCard(ctx context.Context, webhook string, alert ScanLifecycleAlert) (string, error) {
+	webhook = strings.TrimSpace(webhook)
+	if webhook == "" {
+		return "", fmt.Errorf("feishu webhook is empty")
+	}
+
+	payload := buildLifecycleCardPayload(alert)
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal feishu payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build feishu request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send feishu request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	result := strings.TrimSpace(string(raw))
+	if resp.StatusCode >= 300 {
+		return result, fmt.Errorf("feishu webhook returned status %d", resp.StatusCode)
+	}
+
+	if result != "" {
+		var parsed webhookResponse
+		if err := json.Unmarshal(raw, &parsed); err == nil && parsed.Code != 0 {
+			return result, fmt.Errorf("feishu webhook rejected message: %s", parsed.Msg)
+		}
+	}
+
+	return result, nil
+}
+
 func BuildTestAlert(frontendBaseURL string) FindingAlert {
 	return FindingAlert{
 		Title:            "[Everywhere] Feishu card test",
@@ -181,6 +239,43 @@ func BuildScanErrorAlert(scanTaskID string, mode string, targetCount int, reques
 		OccurredAt:       time.Now().UTC(),
 		ResultsURL:       buildResultsURL(frontendBaseURL, scanTaskID),
 		ConfigPreview:    strings.TrimSpace(configPreview),
+	}
+}
+
+func BuildScanStartAlert(scanTaskID string, mode string, targetCount int, frontendBaseURL string) ScanLifecycleAlert {
+	return ScanLifecycleAlert{
+		Title:            "[Everywhere] Scan started",
+		NotificationKind: "scan_start",
+		Severity:         "info",
+		ScanTaskID:       strings.TrimSpace(scanTaskID),
+		Mode:             strings.TrimSpace(mode),
+		TargetCount:      targetCount,
+		Status:           "running",
+		OccurredAt:       time.Now().UTC(),
+		ResultsURL:       buildResultsURL(frontendBaseURL, scanTaskID),
+		Summary:          "Scan task has started dispatching payloads.",
+	}
+}
+
+func BuildScanFinishedAlert(scanTaskID string, mode string, targetCount int, requestSent int, pingbackCount int, responseHits int, status string, frontendBaseURL string) ScanLifecycleAlert {
+	title := "[Everywhere] Scan completed"
+	if strings.EqualFold(strings.TrimSpace(status), "stopped") {
+		title = "[Everywhere] Scan stopped"
+	}
+	return ScanLifecycleAlert{
+		Title:            title,
+		NotificationKind: "scan_finish",
+		Severity:         "info",
+		ScanTaskID:       strings.TrimSpace(scanTaskID),
+		Mode:             strings.TrimSpace(mode),
+		TargetCount:      targetCount,
+		RequestSent:      requestSent,
+		PingbackCount:    pingbackCount,
+		ResponseHits:     responseHits,
+		Status:           strings.TrimSpace(status),
+		OccurredAt:       time.Now().UTC(),
+		ResultsURL:       buildResultsURL(frontendBaseURL, scanTaskID),
+		Summary:          "Scan task has finished waiting for callbacks and response-based checks.",
 	}
 }
 
@@ -351,6 +446,91 @@ func buildScanErrorCardPayload(alert ScanErrorAlert) map[string]any {
 				"title": map[string]any{
 					"tag":     "plain_text",
 					"content": coalesce(alert.Title, "[Everywhere] Scan runtime failure"),
+				},
+			},
+			"elements": elements,
+		},
+	}
+}
+
+func buildLifecycleCardPayload(alert ScanLifecycleAlert) map[string]any {
+	elements := []any{
+		map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag": "lark_md",
+				"content": strings.Join([]string{
+					fmt.Sprintf("**Type**: %s", escapeLarkMD(coalesce(alert.NotificationKind, "scan_lifecycle"))),
+					fmt.Sprintf("**Status**: %s", escapeLarkMD(strings.ToUpper(coalesce(alert.Status, "running")))),
+					fmt.Sprintf("**Severity**: %s", escapeLarkMD(strings.ToUpper(coalesce(alert.Severity, "info")))),
+				}, "\n"),
+			},
+		},
+		map[string]any{
+			"tag": "div",
+			"fields": []any{
+				cardField("Scan ID", coalesce(alert.ScanTaskID, "-"), true),
+				cardField("Mode", coalesce(alert.Mode, "-"), true),
+				cardField("Targets", fmt.Sprintf("%d", alert.TargetCount), true),
+				cardField("Requests sent", fmt.Sprintf("%d", alert.RequestSent), true),
+				cardField("OOB findings", fmt.Sprintf("%d", alert.PingbackCount), true),
+				cardField("Response findings", fmt.Sprintf("%d", alert.ResponseHits), true),
+			},
+		},
+	}
+
+	if summary := strings.TrimSpace(alert.Summary); summary != "" {
+		elements = append(elements, map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": escapeLarkMD(summary),
+			},
+		})
+	}
+
+	elements = append(elements, map[string]any{
+		"tag": "note",
+		"elements": []any{
+			map[string]any{
+				"tag":     "plain_text",
+				"content": fmt.Sprintf("Time: %s", alert.OccurredAt.Local().Format("2006-01-02 15:04:05 MST")),
+			},
+		},
+	})
+
+	if strings.TrimSpace(alert.ResultsURL) != "" {
+		elements = append(elements,
+			map[string]any{"tag": "hr"},
+			map[string]any{
+				"tag": "action",
+				"actions": []any{
+					map[string]any{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "Open Results",
+						},
+						"type": "primary",
+						"url":  strings.TrimSpace(alert.ResultsURL),
+					},
+				},
+			},
+		)
+	}
+
+	return map[string]any{
+		"msg_type": "interactive",
+		"card": map[string]any{
+			"config": map[string]any{
+				"wide_screen_mode": true,
+				"enable_forward":   true,
+			},
+			"header": map[string]any{
+				"template": "blue",
+				"title": map[string]any{
+					"tag":     "plain_text",
+					"content": coalesce(alert.Title, "[Everywhere] Scan lifecycle"),
 				},
 			},
 			"elements": elements,

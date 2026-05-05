@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"net/url"
 	"path/filepath"
 	"runtime/debug"
@@ -32,18 +31,8 @@ type Broadcaster interface {
 }
 
 const (
-	scanModeQuick = "quick"
-	scanModeFull  = "full"
+	scanModeRaw = "raw"
 )
-
-var quickRawPayloadKeys = map[string]struct{}{
-	"absolute-url-host-mismatch": {},
-	"duplicate-host":             {},
-	"sni-host-mismatch":          {},
-	"sni-host-mismatch-reversed": {},
-	"host-at-reversed":           {},
-	"host-with-at":               {},
-}
 
 type StartScanRequest struct {
 	Targets                []string          `json:"targets"`
@@ -56,11 +45,7 @@ type StartScanRequest struct {
 	Proxy                  string            `json:"proxy"`
 	InteractshServer       string            `json:"interactsh_server"`
 	InteractshToken        string            `json:"interactsh_token"`
-	CustomHeaders          map[string]string `json:"custom_headers"`
-	AltPorts               []int             `json:"alt_ports"`
 	ScopeFilter            ScopeFilter       `json:"scope_filter"`
-	DefaultOrigin          string            `json:"default_origin"`
-	DefaultReferer         string            `json:"default_referer"`
 }
 
 type ScopeFilter struct {
@@ -87,9 +72,6 @@ func NewEngine(db *gorm.DB, cfg appconfig.Config, broadcaster Broadcaster) *Engi
 
 func (e *Engine) StartScan(req StartScanRequest) (*database.ScanTask, error) {
 	req.applyDefaults(e.cfg)
-	if !isSupportedScanMode(req.Mode) {
-		return nil, fmt.Errorf("unsupported scan mode: %s", req.Mode)
-	}
 
 	var targetSet database.TargetSet
 	targetCount := 0
@@ -187,6 +169,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 		e.failTask(taskID, err, "")
 		return
 	}
+	e.maybeNotifyScanStarted(scanTask)
 
 	client, err := oob.New(req.InteractshServer, req.InteractshToken)
 	if err != nil {
@@ -243,7 +226,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 			})
 			e.broadcastProgress(taskID, 0, totalRequests)
 
-			if err := e.dispatch(ctx, taskID, req, client, httpClient, targets, items, totalRequests, batchIndex, len(batches)); err != nil && !errors.Is(err, context.Canceled) {
+			if err := e.dispatch(ctx, taskID, req, client, targets, items, totalRequests, batchIndex, len(batches)); err != nil && !errors.Is(err, context.Canceled) {
 				e.failTask(taskID, err, "")
 				return
 			}
@@ -272,7 +255,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 			})
 			e.broadcastProgress(taskID, 0, totalRequests)
 
-			if err := e.dispatch(ctx, taskID, req, client, httpClient, targets, items, totalRequests, batchIndex, scanTask.BatchCount); err != nil && !errors.Is(err, context.Canceled) {
+			if err := e.dispatch(ctx, taskID, req, client, targets, items, totalRequests, batchIndex, scanTask.BatchCount); err != nil && !errors.Is(err, context.Canceled) {
 				e.failTask(taskID, err, "")
 				return
 			}
@@ -320,7 +303,6 @@ func (e *Engine) dispatch(
 	taskID string,
 	req StartScanRequest,
 	client *oob.Client,
-	httpClient *http.Client,
 	targets []string,
 	items []payload.Payload,
 	totalRequests int,
@@ -356,16 +338,13 @@ func (e *Engine) dispatch(
 		}()
 	}
 
-	standardPayloads := filterPayloadsByType(items, payload.TypeParam)
-	rawPayloads := filterPayloadsByType(items, payload.TypeRaw)
-
 enqueueLoop:
 	for idx, target := range targets {
 		target := target
 		targetOrdinal := idx + 1
 		select {
 		case jobs <- func() error {
-			return e.scanTarget(ctx, taskID, req, client, httpClient, limiter, target, standardPayloads, rawPayloads, totalRequests, batchIndex, batchTotal, targetOrdinal, len(targets))
+			return e.scanTarget(ctx, taskID, client, limiter, target, items, totalRequests, batchIndex, batchTotal, targetOrdinal, len(targets))
 		}:
 		case <-ctx.Done():
 			break enqueueLoop
@@ -386,12 +365,9 @@ enqueueLoop:
 func (e *Engine) scanTarget(
 	ctx context.Context,
 	taskID string,
-	req StartScanRequest,
 	client *oob.Client,
-	httpClient *http.Client,
 	limiter *rate.Limiter,
 	target string,
-	standardPayloads []payload.Payload,
 	rawPayloads []payload.Payload,
 	totalRequests int,
 	batchIndex int,
@@ -406,40 +382,20 @@ func (e *Engine) scanTarget(
 	e.setTaskActivity(taskID, batchIndex, target, fmt.Sprintf("target %d/%d", targetOrdinal, batchTargetCount), totalRequests)
 	e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d started: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, target))
 
-	if len(standardPayloads) > 0 {
-		if err := limiter.Wait(ctx); err != nil {
-			return err
-		}
-		e.setTaskActivity(taskID, batchIndex, target, "standard-params", totalRequests)
-		e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d standard params dispatched: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, target))
-		if err := e.sendStandardTarget(ctx, taskID, req, client, httpClient, target, standardPayloads, totalRequests); err != nil {
-			return err
-		}
-	}
-
 	for _, rawPayload := range rawPayloads {
-		if rawPayload.Key == "alt-ports" {
-			continue
-		}
 		if err := limiter.Wait(ctx); err != nil {
 			return err
 		}
 		e.setTaskActivity(taskID, batchIndex, target, "raw-"+rawPayload.Key, totalRequests)
 		e.broadcastLog(taskID, "debug", fmt.Sprintf("Batch %d/%d target %d/%d raw %s dispatched: %s", batchIndex, batchTotal, targetOrdinal, batchTargetCount, rawPayload.Key, target))
-		if err := e.sendRawTarget(ctx, taskID, req, client, target, rawPayload, totalRequests); err != nil {
-			return err
+		if rawPayload.Key == proxyLocalSSHPayloadKey {
+			if _, err := e.sendProxyUnsafeTarget(ctx, taskID, target, totalRequests); err != nil {
+				return err
+			}
+			continue
 		}
-	}
-
-	for _, altTarget := range buildAltTargets(target, req.AltPorts) {
-		if len(standardPayloads) > 0 {
-			if err := limiter.Wait(ctx); err != nil {
-				return err
-			}
-			e.setTaskActivity(taskID, batchIndex, altTarget, "alt-port-params", totalRequests)
-			if err := e.sendStandardTarget(ctx, taskID, req, client, httpClient, altTarget, standardPayloads, totalRequests); err != nil {
-				return err
-			}
+		if err := e.sendRawTarget(ctx, taskID, client, target, rawPayload, totalRequests); err != nil {
+			return err
 		}
 	}
 
@@ -448,104 +404,9 @@ func (e *Engine) scanTarget(
 	return nil
 }
 
-func (e *Engine) sendStandardTarget(
-	ctx context.Context,
-	taskID string,
-	req StartScanRequest,
-	client *oob.Client,
-	httpClient *http.Client,
-	target string,
-	items []payload.Payload,
-	totalRequests int,
-) error {
-	parsed, err := url.Parse(target)
-	if err != nil {
-		return err
-	}
-
-	resolveOpts := payload.ResolveOptions{
-		Host:           parsed.Hostname(),
-		DefaultOrigin:  req.DefaultOrigin,
-		DefaultReferer: req.DefaultReferer,
-	}
-
-	resolved := make([]payload.ResolvedPayload, 0, len(items))
-	uniqueIDs := make([]string, 0, len(items))
-	sentRows := make([]database.SentPayload, 0, len(items))
-	sentAt := time.Now().UTC()
-
-	for _, item := range items {
-		if !canResolvePayload(item, resolveOpts) {
-			continue
-		}
-		entry := oob.CorrelationEntry{
-			ScanTaskID:  taskID,
-			TargetURL:   target,
-			PayloadType: string(item.Type),
-			PayloadKey:  item.Key,
-			SentAt:      sentAt,
-		}
-		oobURL := client.GeneratePayload(entry)
-		resolvedItem, ok := payload.Resolve(item, oobURL, resolveOpts)
-		if !ok {
-			continue
-		}
-
-		uniqueID := firstLabel(oobURL)
-		entry.PayloadVal = resolvedItem.ResolvedValue
-		client.Store(uniqueID, entry)
-		uniqueIDs = append(uniqueIDs, uniqueID)
-		sentRows = append(sentRows, database.SentPayload{
-			UniqueID:     uniqueID,
-			ScanTaskID:   taskID,
-			TargetURL:    target,
-			PayloadType:  string(item.Type),
-			PayloadKey:   item.Key,
-			PayloadValue: resolvedItem.ResolvedValue,
-			SentAt:       sentAt,
-		})
-		resolved = append(resolved, resolvedItem)
-	}
-
-	if len(resolved) == 0 {
-		return nil
-	}
-	triggerReq, err := BuildStandardRequest(ctx, target, resolved, req.CustomHeaders)
-	if err != nil {
-		return err
-	}
-	snapshot, err := CaptureRequestSnapshot(triggerReq)
-	if err != nil {
-		return err
-	}
-	for idx := range sentRows {
-		sentRows[idx].RequestMethod = snapshot.Method
-		sentRows[idx].RequestURL = snapshot.URL
-		sentRows[idx].RawRequest = snapshot.RawRequest
-		sentRows[idx].ReplayCommand = snapshot.ReplayCommand
-	}
-	if err := e.db.Create(&sentRows).Error; err != nil {
-		return err
-	}
-
-	statusCode, err := SendPreparedRequest(httpClient, triggerReq)
-	if err != nil {
-		log.Printf("send standard request failed target=%s err=%v", target, err)
-		e.incrementRequestCount(taskID, totalRequests)
-		return nil
-	}
-
-	e.incrementRequestCount(taskID, totalRequests)
-	if len(uniqueIDs) > 0 {
-		e.db.Model(&database.SentPayload{}).Where("unique_id IN ?", uniqueIDs).Update("response_status", statusCode)
-	}
-	return nil
-}
-
 func (e *Engine) sendRawTarget(
 	ctx context.Context,
 	taskID string,
-	req StartScanRequest,
 	client *oob.Client,
 	target string,
 	item payload.Payload,
@@ -752,6 +613,7 @@ func (e *Engine) finishTask(taskID string, status string) {
 		"scan_id": taskID,
 		"status":  status,
 	})
+	e.maybeNotifyScanFinished(taskID, status)
 }
 
 func (e *Engine) failTask(taskID string, err error, detail string) {
@@ -869,7 +731,7 @@ func (e *Engine) broadcastProgress(taskID string, sent int, total int) {
 func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
 	r.Mode = normalizeScanMode(r.Mode)
 	if r.Mode == "" {
-		r.Mode = scanModeQuick
+		r.Mode = scanModeRaw
 	}
 	if r.Concurrency <= 0 {
 		r.Concurrency = cfg.Scanner.DefaultConcurrency
@@ -892,80 +754,24 @@ func (r *StartScanRequest) applyDefaults(cfg appconfig.Config) {
 	if r.InteractshToken == "" {
 		r.InteractshToken = cfg.Interactsh.Token
 	}
-	if r.DefaultOrigin == "" {
-		r.DefaultOrigin = cfg.Scanner.DefaultOrigin
-	}
-	if r.DefaultReferer == "" {
-		r.DefaultReferer = cfg.Scanner.DefaultReferer
-	}
-	if r.CustomHeaders == nil {
-		r.CustomHeaders = map[string]string{}
-	}
 }
 
 func normalizeScanMode(mode string) string {
-	return strings.ToLower(strings.TrimSpace(mode))
-}
-
-func isSupportedScanMode(mode string) bool {
-	switch normalizeScanMode(mode) {
-	case scanModeQuick, scanModeFull:
-		return true
-	default:
-		return false
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return scanModeRaw
 	}
+	return scanModeRaw
 }
 
-func selectPayloadsForMode(items []payload.Payload, mode string) []payload.Payload {
+func selectPayloadsForMode(items []payload.Payload, _ string) []payload.Payload {
 	selected := make([]payload.Payload, 0, len(items))
-	switch normalizeScanMode(mode) {
-	case scanModeQuick:
-		for _, item := range items {
-			if !item.Active {
-				continue
-			}
-			if item.Group == "cracking_the_lens" && item.Type == payload.TypeRaw && isQuickRawPayload(item.Key) {
-				selected = append(selected, item)
-			}
-		}
-	case scanModeFull:
-		for _, item := range items {
-			if item.Active && item.Type != payload.TypeHeader {
-				selected = append(selected, item)
-			}
+	for _, item := range items {
+		if item.Active && item.Type == payload.TypeRaw {
+			selected = append(selected, item)
 		}
 	}
 	return selected
-}
-
-func isQuickRawPayload(key string) bool {
-	_, ok := quickRawPayloadKeys[strings.ToLower(strings.TrimSpace(key))]
-	return ok
-}
-
-func canResolvePayload(item payload.Payload, opts payload.ResolveOptions) bool {
-	if strings.Contains(item.Value, "%o") && opts.DefaultOrigin == "" {
-		return false
-	}
-	if strings.Contains(item.Value, "%r") && opts.DefaultReferer == "" {
-		return false
-	}
-	return true
-}
-
-func filterPayloadsByType(items []payload.Payload, kinds ...payload.Type) []payload.Payload {
-	allowed := make(map[payload.Type]struct{}, len(kinds))
-	for _, kind := range kinds {
-		allowed[kind] = struct{}{}
-	}
-
-	var filtered []payload.Payload
-	for _, item := range items {
-		if _, ok := allowed[item.Type]; ok {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
 }
 
 func filterTargets(targets []string, scope ScopeFilter) []string {
@@ -1008,27 +814,6 @@ func matchesScope(host string, patterns []string, emptyDefault bool) bool {
 		}
 	}
 	return false
-}
-
-func buildAltTargets(target string, ports []int) []string {
-	if len(ports) == 0 {
-		return nil
-	}
-	parsed, err := url.Parse(target)
-	if err != nil {
-		return nil
-	}
-
-	var results []string
-	for _, port := range ports {
-		if port <= 0 {
-			continue
-		}
-		cloned := *parsed
-		cloned.Host = net.JoinHostPort(parsed.Hostname(), fmt.Sprintf("%d", port))
-		results = append(results, cloned.String())
-	}
-	return results
 }
 
 func batchCount(totalTargets int, batchSize int) int {
@@ -1087,33 +872,22 @@ func (e *Engine) loadTargetSetBatch(targetSetID string, lastPosition int, batchS
 	return targets, nextPosition, nil
 }
 
-func estimateTotalRequests(req StartScanRequest, items []payload.Payload, targetCount int) int {
+func estimateTotalRequests(_ StartScanRequest, items []payload.Payload, targetCount int) int {
 	if targetCount == 0 || len(items) == 0 {
 		return 0
 	}
 
-	standardCount := 0
 	rawCount := 0
 	for _, item := range items {
-		switch item.Type {
-		case payload.TypeParam:
-			standardCount = 1
-		case payload.TypeRaw:
-			if item.Key != "alt-ports" {
-				rawCount++
+		if item.Type == payload.TypeRaw {
+			if item.Key == proxyLocalSSHPayloadKey {
+				rawCount += len(proxyUnsafeVariants())
+				continue
 			}
+			rawCount++
 		}
 	}
-
-	perTarget := standardCount + rawCount
-	if len(req.AltPorts) > 0 {
-		for _, port := range req.AltPorts {
-			if port > 0 {
-				perTarget += standardCount
-			}
-		}
-	}
-	return targetCount * perTarget
+	return targetCount * rawCount
 }
 
 func firstLabel(value string) string {
@@ -1159,3 +933,4 @@ func coalesce(values ...string) string {
 	}
 	return ""
 }
+

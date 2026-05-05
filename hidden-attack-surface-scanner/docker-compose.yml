@@ -45,7 +45,6 @@ services:
       "-config", "/data/config.yaml",
       "-payloads", "/app/configs/injections.yaml",
       "-targets-file", "/data/targets.txt",
-      "-mode", "quick",
       "-batch-size", "1500",
       "-rate-limit", "20",
       "-callback-timeout", "1440"

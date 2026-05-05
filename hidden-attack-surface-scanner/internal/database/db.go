@@ -18,7 +18,7 @@ func Open(cfg appconfig.Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if err := db.AutoMigrate(&ScanTask{}, &PayloadTemplate{}, &SentPayload{}, &Pingback{}, &NotificationState{}, &TargetSet{}, &TargetRecord{}, &TargetImportJob{}); err != nil {
+	if err := db.AutoMigrate(&ScanTask{}, &PayloadTemplate{}, &SentPayload{}, &Pingback{}, &ResponseFinding{}, &NotificationState{}, &TargetSet{}, &TargetRecord{}, &TargetImportJob{}); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	if err := migratePingbackIndexes(db); err != nil {
@@ -64,4 +64,30 @@ func SeedPayloads(db *gorm.DB, items []payload.Payload) error {
 		})
 	}
 	return db.Create(&records).Error
+}
+
+func SyncPayloads(db *gorm.DB, items []payload.Payload) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&PayloadTemplate{}).Error; err != nil {
+			return err
+		}
+
+		if len(items) == 0 {
+			return nil
+		}
+
+		records := make([]PayloadTemplate, 0, len(items))
+		for idx, item := range items {
+			records = append(records, PayloadTemplate{
+				Active:   item.Active,
+				Type:     string(item.Type),
+				Key:      item.Key,
+				Value:    item.Value,
+				Group:    item.Group,
+				Comment:  item.Comment,
+				Position: idx,
+			})
+		}
+		return tx.Create(&records).Error
+	})
 }
