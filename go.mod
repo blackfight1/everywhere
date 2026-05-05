@@ -1,4 +1,4 @@
-module hidden-attack-surface-scanner
+module github.com/blackfight1/everywhere
 
 go 1.25.0
 
@@ -171,3 +171,4 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/corvus-ch/zbase32.v1 v1.0.0 // indirect
 )
+

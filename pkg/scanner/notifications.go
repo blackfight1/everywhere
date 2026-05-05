@@ -5,13 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 	"time"
 
-	appconfig "hidden-attack-surface-scanner/internal/config"
-	"hidden-attack-surface-scanner/internal/database"
-	"hidden-attack-surface-scanner/pkg/notify"
+	"github.com/blackfight1/everywhere/internal/database"
+	"github.com/blackfight1/everywhere/pkg/notify"
 
 	"gorm.io/gorm"
 )
@@ -80,7 +78,7 @@ func (e *Engine) maybeNotifyFinding(pingback database.Pingback) {
 		OccurredAt:       pingback.ReceivedAt,
 		TriggerPreview:   sent.RawRequest,
 		ReplayPreview:    sent.ReplayCommand,
-		ResultsURL:       buildResultsURL(cfg, pingback.ScanTaskID),
+		ResultsURL:       "",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -153,7 +151,7 @@ func (e *Engine) maybeNotifyResponseFinding(finding database.ResponseFinding) {
 		OccurredAt:       finding.CreatedAt,
 		TriggerPreview:   finding.RawRequest,
 		ReplayPreview:    finding.ReplayCommand,
-		ResultsURL:       buildResultsURL(cfg, finding.ScanTaskID),
+		ResultsURL:       "",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -189,7 +187,7 @@ func (e *Engine) maybeNotifyScanStarted(task database.ScanTask) {
 		return
 	}
 
-	alert := notify.BuildScanStartAlert(task.ID, task.Mode, task.TargetCount, cfg.FrontendBaseURL)
+	alert := notify.BuildScanStartAlert(task.ID, task.Mode, task.TargetCount, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	response, err := notify.SendFeishuLifecycleCard(ctx, cfg.FeishuWebhook, alert)
@@ -220,7 +218,7 @@ func (e *Engine) maybeNotifyScanFinished(taskID string, status string) {
 		task.PingbackCount,
 		task.ResponseHitCount,
 		status,
-		cfg.FrontendBaseURL,
+		"",
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -230,6 +228,37 @@ func (e *Engine) maybeNotifyScanFinished(taskID string, status string) {
 		return
 	}
 	log.Printf("scan finish notification sent task=%s response=%s", taskID, response)
+}
+
+func (e *Engine) maybeNotifyDispatchFinished(taskID string) {
+	cfg := e.cfg.Notification
+	if !cfg.Enabled || strings.TrimSpace(cfg.FeishuWebhook) == "" {
+		return
+	}
+
+	var task database.ScanTask
+	if err := e.db.First(&task, "id = ?", taskID).Error; err != nil {
+		log.Printf("load dispatch-finished task for notification failed task=%s err=%v", taskID, err)
+		return
+	}
+
+	alert := notify.BuildDispatchFinishedAlert(
+		task.ID,
+		task.Mode,
+		task.TargetCount,
+		task.RequestSent,
+		task.PingbackCount,
+		task.ResponseHitCount,
+		"",
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	response, err := notify.SendFeishuLifecycleCard(ctx, cfg.FeishuWebhook, alert)
+	if err != nil {
+		log.Printf("send dispatch-finished notification failed task=%s err=%v response=%s", taskID, err, response)
+		return
+	}
+	log.Printf("dispatch-finished notification sent task=%s response=%s", taskID, response)
 }
 
 func (e *Engine) findingProtocols(pingback database.Pingback) ([]string, error) {
@@ -320,17 +349,6 @@ func buildResponseNotificationTitle(confidence string, kind string) string {
 	default:
 		return prefix + " Confirmed response finding"
 	}
-}
-
-func buildResultsURL(cfg appconfig.NotificationConfig, scanTaskID string) string {
-	base := strings.TrimRight(strings.TrimSpace(cfg.FrontendBaseURL), "/")
-	if base == "" || strings.TrimSpace(scanTaskID) == "" {
-		return ""
-	}
-
-	values := url.Values{}
-	values.Set("scan_task_id", scanTaskID)
-	return base + "/results?" + values.Encode()
 }
 
 func coalesceURL(value string, fallback string) string {

@@ -279,6 +279,24 @@ func BuildScanFinishedAlert(scanTaskID string, mode string, targetCount int, req
 	}
 }
 
+func BuildDispatchFinishedAlert(scanTaskID string, mode string, targetCount int, requestSent int, pingbackCount int, responseHits int, frontendBaseURL string) ScanLifecycleAlert {
+	return ScanLifecycleAlert{
+		Title:            "[Everywhere] Scan dispatch finished",
+		NotificationKind: "dispatch_finish",
+		Severity:         "info",
+		ScanTaskID:       strings.TrimSpace(scanTaskID),
+		Mode:             strings.TrimSpace(mode),
+		TargetCount:      targetCount,
+		RequestSent:      requestSent,
+		PingbackCount:    pingbackCount,
+		ResponseHits:     responseHits,
+		Status:           "waiting_callback",
+		OccurredAt:       time.Now().UTC(),
+		ResultsURL:       buildResultsURL(frontendBaseURL, scanTaskID),
+		Summary:          "All payloads have been dispatched. The task is now waiting for OOB callbacks.",
+	}
+}
+
 func buildCardPayload(alert FindingAlert) map[string]any {
 	elements := []any{
 		map[string]any{

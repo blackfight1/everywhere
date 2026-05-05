@@ -3,8 +3,8 @@ package database
 import (
 	"fmt"
 
-	appconfig "hidden-attack-surface-scanner/internal/config"
-	"hidden-attack-surface-scanner/pkg/payload"
+	appconfig "github.com/blackfight1/everywhere/internal/config"
+	"github.com/blackfight1/everywhere/pkg/payload"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

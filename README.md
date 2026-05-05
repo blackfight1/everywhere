@@ -13,7 +13,21 @@ The tool now scans only 4 core raw payload types:
 
 Everything else has been removed from the default workflow.
 
-## Build
+## Install
+
+Install with `go install`:
+
+```bash
+go install github.com/blackfight1/everywhere/cmd/everywhere@latest
+```
+
+Update later:
+
+```bash
+everywhere update
+```
+
+Or:
 
 ```bash
 go build -o everywhere ./cmd/everywhere
@@ -56,9 +70,11 @@ everywhere scan -targets-file targets.txt -json-summary
 
 If you do not override them, the scanner uses:
 
-- config: `configs/config.yaml`
-- payloads: `configs/injections.yaml`
+- config: `~/.config/everywhere/config.yaml`
+- payloads: `~/.config/everywhere/payloads.yaml`
 - mode: raw-only
+
+The first CLI run will create these YAML files automatically.
 
 ## Docker Compose
 

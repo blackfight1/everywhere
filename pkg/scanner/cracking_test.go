@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"hidden-attack-surface-scanner/pkg/payload"
+	"github.com/blackfight1/everywhere/pkg/payload"
 )
 
 func TestBuildCrackingRequestDuplicateHost(t *testing.T) {

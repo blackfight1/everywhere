@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -15,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	appconfig "hidden-attack-surface-scanner/internal/config"
-	"hidden-attack-surface-scanner/internal/database"
-	"hidden-attack-surface-scanner/pkg/notify"
-	"hidden-attack-surface-scanner/pkg/payload"
-	"hidden-attack-surface-scanner/pkg/scanner"
+	"github.com/blackfight1/everywhere/internal/assets"
+	appconfig "github.com/blackfight1/everywhere/internal/config"
+	"github.com/blackfight1/everywhere/internal/database"
+	"github.com/blackfight1/everywhere/pkg/notify"
+	"github.com/blackfight1/everywhere/pkg/payload"
+	"github.com/blackfight1/everywhere/pkg/scanner"
 
 	"gorm.io/gorm"
 )
@@ -128,12 +130,17 @@ type scanOptions struct {
 	writeJSON   bool
 }
 
+const installTarget = "github.com/blackfight1/everywhere/cmd/everywhere"
+
 func main() {
 	log.SetFlags(log.LstdFlags)
 
 	command := "scan"
 	args := os.Args[1:]
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && (args[0] == "-update" || args[0] == "--update") {
+		command = "update"
+		args = args[1:]
+	} else if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command = strings.ToLower(strings.TrimSpace(args[0]))
 		args = args[1:]
 	}
@@ -143,6 +150,8 @@ func main() {
 		runScan(args)
 	case "notify-test":
 		runNotifyTest(args)
+	case "update":
+		runUpdate(args)
 	case "help", "-h", "--help":
 		printRootHelp()
 	default:
@@ -151,10 +160,15 @@ func main() {
 }
 
 func runScan(args []string) {
+	configPath, payloadsPath, err := defaultRuntimePaths()
+	if err != nil {
+		log.Fatalf("resolve runtime paths: %v", err)
+	}
+
 	opts := scanOptions{}
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	fs.StringVar(&opts.configPath, "config", "configs/config.yaml", "path to config file")
-	fs.StringVar(&opts.payloadPath, "payloads", "configs/injections.yaml", "path to payload config")
+	fs.StringVar(&opts.configPath, "config", configPath, "path to config file")
+	fs.StringVar(&opts.payloadPath, "payloads", payloadsPath, "path to payload config")
 	fs.StringVar(&opts.target, "target", "", "single target URL")
 	fs.StringVar(&opts.targetFile, "targets-file", "", "path to newline-delimited target file")
 	fs.IntVar(&opts.concurrency, "concurrency", 0, "worker concurrency")
@@ -177,8 +191,8 @@ func runScan(args []string) {
 		log.Fatal(err)
 	}
 
-	if err := ensureConfigFile(opts.configPath); err != nil {
-		log.Fatalf("prepare config: %v", err)
+	if err := ensureRuntimeFiles(opts.configPath, opts.payloadPath); err != nil {
+		log.Fatalf("prepare runtime files: %v", err)
 	}
 
 	cfg, err := appconfig.Load(opts.configPath)
@@ -251,15 +265,33 @@ func runScan(args []string) {
 }
 
 func printRootHelp() {
+	configDir, _ := defaultConfigDir()
 	fmt.Println("Everywhere CLI")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  everywhere scan -target https://example.com")
 	fmt.Println("  everywhere scan -targets-file targets.txt")
+	fmt.Println("  everywhere notify-test")
+	fmt.Println("  everywhere update")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  scan    run the raw payload scanner")
 	fmt.Println("  notify-test    send a test Feishu notification")
+	fmt.Println("  update    reinstall latest version via go install")
+	if strings.TrimSpace(configDir) != "" {
+		fmt.Println()
+		fmt.Printf("Config Dir:\n  %s\n", configDir)
+	}
+}
+
+func ensureRuntimeFiles(configPath string, payloadPath string) error {
+	if err := ensureConfigFile(configPath); err != nil {
+		return err
+	}
+	if err := ensurePayloadFile(payloadPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func ensureConfigFile(path string) error {
@@ -269,6 +301,40 @@ func ensureConfigFile(path string) error {
 		return err
 	}
 	return appconfig.Save(path, appconfig.Default())
+}
+
+func ensurePayloadFile(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("payload path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, assets.DefaultPayloadsYAML, 0o600)
+}
+
+func defaultConfigDir() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("EVERYWHERE_CONFIG_DIR")); value != "" {
+		return value, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "everywhere"), nil
+}
+
+func defaultRuntimePaths() (string, string, error) {
+	dir, err := defaultConfigDir()
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(dir, "config.yaml"), filepath.Join(dir, "payloads.yaml"), nil
 }
 
 func loadTargets(single string, filePath string) ([]string, error) {
@@ -295,10 +361,19 @@ func loadTargets(single string, filePath string) ([]string, error) {
 }
 
 func runNotifyTest(args []string) {
+	defaultConfigPath, _, err := defaultRuntimePaths()
+	if err != nil {
+		log.Fatalf("resolve runtime paths: %v", err)
+	}
+
 	fs := flag.NewFlagSet("notify-test", flag.ExitOnError)
-	configPath := fs.String("config", "configs/config.yaml", "path to config file")
+	configPath := fs.String("config", defaultConfigPath, "path to config file")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
+	}
+
+	if err := ensureConfigFile(*configPath); err != nil {
+		log.Fatalf("prepare config: %v", err)
 	}
 
 	cfg, err := appconfig.Load(*configPath)
@@ -315,7 +390,7 @@ func runNotifyTest(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	alert := notify.BuildScanStartAlert("notify-test-scan", "raw", 1, cfg.Notification.FrontendBaseURL)
+	alert := notify.BuildScanStartAlert("notify-test-scan", "raw", 1, "")
 	alert.Title = "[Everywhere] Feishu webhook test"
 	alert.Summary = "This is a direct webhook validation from the CLI."
 	response, err := notify.SendFeishuLifecycleCard(ctx, cfg.Notification.FeishuWebhook, alert)
@@ -323,6 +398,29 @@ func runNotifyTest(args []string) {
 		log.Fatalf("send test notification: %v response=%s", err, response)
 	}
 	log.Printf("test notification sent successfully response=%s", response)
+}
+
+func runUpdate(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	version := fs.String("version", "latest", "module version to install")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		log.Fatalf("go not found in PATH: %v", err)
+	}
+
+	target := installTarget + "@" + strings.TrimSpace(*version)
+	cmd := exec.Command(goBin, "install", target)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("update failed: %v", err)
+	}
+	log.Printf("updated successfully via `go install %s`", target)
 }
 
 func waitForTaskCompletion(ctx context.Context, db *gorm.DB, taskID string) (database.ScanTask, []database.Pingback, []database.ResponseFinding, error) {
@@ -359,24 +457,24 @@ func waitForTaskCompletion(ctx context.Context, db *gorm.DB, taskID string) (dat
 func printSummary(task database.ScanTask, pingbacks []database.Pingback, responseFindings []database.ResponseFinding, asJSON bool) {
 	if asJSON {
 		summary := map[string]any{
-			"task_id":                    task.ID,
-			"status":                     task.Status,
-			"mode":                       task.Mode,
-			"targets":                    task.TargetCount,
-			"estimated_requests":         task.EstimatedRequests,
-			"requests_sent":              task.RequestSent,
-			"pingback_count":             task.PingbackCount,
-			"response_finding_count":     task.ResponseHitCount,
-			"batch_count":                task.BatchCount,
-			"completed_targets":          task.CompletedTargets,
-			"current_stage":              task.CurrentStage,
-			"started_at":                 task.StartedAt,
-			"completed_at":               task.CompletedAt,
-			"last_error":                 task.LastError,
-			"oob_findings_by_payload":    countByPayload(pingbacks),
-			"oob_findings_by_proto":      countByProtocol(pingbacks),
-			"response_findings_by_key":   countResponseByPayload(responseFindings),
-			"response_findings_by_conf":  countResponseByConfidence(responseFindings),
+			"task_id":                   task.ID,
+			"status":                    task.Status,
+			"mode":                      task.Mode,
+			"targets":                   task.TargetCount,
+			"estimated_requests":        task.EstimatedRequests,
+			"requests_sent":             task.RequestSent,
+			"pingback_count":            task.PingbackCount,
+			"response_finding_count":    task.ResponseHitCount,
+			"batch_count":               task.BatchCount,
+			"completed_targets":         task.CompletedTargets,
+			"current_stage":             task.CurrentStage,
+			"started_at":                task.StartedAt,
+			"completed_at":              task.CompletedAt,
+			"last_error":                task.LastError,
+			"oob_findings_by_payload":   countByPayload(pingbacks),
+			"oob_findings_by_proto":     countByProtocol(pingbacks),
+			"response_findings_by_key":  countResponseByPayload(responseFindings),
+			"response_findings_by_conf": countResponseByConfidence(responseFindings),
 		}
 		data, _ := json.MarshalIndent(summary, "", "  ")
 		fmt.Println(string(data))

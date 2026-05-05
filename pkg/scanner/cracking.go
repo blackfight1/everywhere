@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"hidden-attack-surface-scanner/pkg/payload"
+	"github.com/blackfight1/everywhere/pkg/payload"
 )
 
 type ProxyUnsafeVariant struct {

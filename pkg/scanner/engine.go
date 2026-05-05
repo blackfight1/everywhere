@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	appconfig "hidden-attack-surface-scanner/internal/config"
-	"hidden-attack-surface-scanner/internal/database"
-	"hidden-attack-surface-scanner/pkg/correlator"
-	"hidden-attack-surface-scanner/pkg/notify"
-	"hidden-attack-surface-scanner/pkg/oob"
-	"hidden-attack-surface-scanner/pkg/payload"
+	appconfig "github.com/blackfight1/everywhere/internal/config"
+	"github.com/blackfight1/everywhere/internal/database"
+	"github.com/blackfight1/everywhere/pkg/correlator"
+	"github.com/blackfight1/everywhere/pkg/notify"
+	"github.com/blackfight1/everywhere/pkg/oob"
+	"github.com/blackfight1/everywhere/pkg/payload"
 
 	"github.com/projectdiscovery/interactsh/pkg/server"
 	"golang.org/x/time/rate"
@@ -35,17 +35,17 @@ const (
 )
 
 type StartScanRequest struct {
-	Targets                []string          `json:"targets"`
-	TargetSetID            string            `json:"target_set_id"`
-	Mode                   string            `json:"mode"`
-	Concurrency            int               `json:"concurrency"`
-	BatchSize              int               `json:"batch_size"`
-	RateLimit              int               `json:"rate_limit"`
-	CallbackTimeoutMinutes int               `json:"callback_timeout_minutes"`
-	Proxy                  string            `json:"proxy"`
-	InteractshServer       string            `json:"interactsh_server"`
-	InteractshToken        string            `json:"interactsh_token"`
-	ScopeFilter            ScopeFilter       `json:"scope_filter"`
+	Targets                []string    `json:"targets"`
+	TargetSetID            string      `json:"target_set_id"`
+	Mode                   string      `json:"mode"`
+	Concurrency            int         `json:"concurrency"`
+	BatchSize              int         `json:"batch_size"`
+	RateLimit              int         `json:"rate_limit"`
+	CallbackTimeoutMinutes int         `json:"callback_timeout_minutes"`
+	Proxy                  string      `json:"proxy"`
+	InteractshServer       string      `json:"interactsh_server"`
+	InteractshToken        string      `json:"interactsh_token"`
+	ScopeFilter            ScopeFilter `json:"scope_filter"`
 }
 
 type ScopeFilter struct {
@@ -286,6 +286,7 @@ func (e *Engine) runTask(ctx context.Context, taskID string, req StartScanReques
 		"scan_id": taskID,
 		"status":  "waiting_callback",
 	})
+	e.maybeNotifyDispatchFinished(taskID)
 
 	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(req.CallbackTimeoutMinutes)*time.Minute)
 	defer cancel()
@@ -665,7 +666,7 @@ func (e *Engine) maybeNotifyTaskFailure(taskID string, err error, detail string)
 		task.TargetCount,
 		task.RequestSent,
 		err,
-		cfg.FrontendBaseURL,
+		"",
 		configPreview,
 	)
 
@@ -933,4 +934,3 @@ func coalesce(values ...string) string {
 	}
 	return ""
 }
-

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"hidden-attack-surface-scanner/internal/database"
+	"github.com/blackfight1/everywhere/internal/database"
 
 	"gorm.io/gorm"
 )

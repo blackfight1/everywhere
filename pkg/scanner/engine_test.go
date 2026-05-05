@@ -3,8 +3,8 @@ package scanner
 import (
 	"testing"
 
-	appconfig "hidden-attack-surface-scanner/internal/config"
-	"hidden-attack-surface-scanner/pkg/payload"
+	appconfig "github.com/blackfight1/everywhere/internal/config"
+	"github.com/blackfight1/everywhere/pkg/payload"
 )
 
 func TestEstimateTotalRequestsOnlyCountsRawPayloads(t *testing.T) {

@@ -15,6 +15,10 @@ func LoadFromYAML(path string) ([]Payload, error) {
 		return nil, err
 	}
 
+	return LoadFromYAMLBytes(data)
+}
+
+func LoadFromYAMLBytes(data []byte) ([]Payload, error) {
 	var file File
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, err

@@ -11,17 +11,11 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig       `json:"server" yaml:"server"`
 	Database     DatabaseConfig     `json:"database" yaml:"database"`
 	Interactsh   InteractshConfig   `json:"interactsh" yaml:"interactsh"`
 	Scanner      ScannerConfig      `json:"scanner" yaml:"scanner"`
 	OwnIP        OwnIPConfig        `json:"own_ip" yaml:"own_ip"`
 	Notification NotificationConfig `json:"notification" yaml:"notification"`
-	Auth         AuthConfig         `json:"-" yaml:"auth"`
-}
-
-type ServerConfig struct {
-	Listen string `json:"listen" yaml:"listen"`
 }
 
 type DatabaseConfig struct {
@@ -39,12 +33,10 @@ type InteractshConfig struct {
 }
 
 type ScannerConfig struct {
-	DefaultConcurrency   int    `json:"default_concurrency" yaml:"default_concurrency"`
-	DefaultBatchSize     int    `json:"default_batch_size" yaml:"default_batch_size"`
-	DefaultRateLimit     int    `json:"default_rate_limit" yaml:"default_rate_limit"`
-	DefaultTimeoutMinute int    `json:"default_timeout_minutes" yaml:"default_timeout_minutes"`
-	DefaultOrigin        string `json:"default_origin" yaml:"default_origin"`
-	DefaultReferer       string `json:"default_referer" yaml:"default_referer"`
+	DefaultConcurrency   int `json:"default_concurrency" yaml:"default_concurrency"`
+	DefaultBatchSize     int `json:"default_batch_size" yaml:"default_batch_size"`
+	DefaultRateLimit     int `json:"default_rate_limit" yaml:"default_rate_limit"`
+	DefaultTimeoutMinute int `json:"default_timeout_minutes" yaml:"default_timeout_minutes"`
 }
 
 type OwnIPConfig struct {
@@ -52,23 +44,12 @@ type OwnIPConfig struct {
 }
 
 type NotificationConfig struct {
-	Enabled         bool   `json:"enabled" yaml:"enabled"`
-	FeishuWebhook   string `json:"feishu_webhook" yaml:"feishu_webhook"`
-	FrontendBaseURL string `json:"frontend_base_url" yaml:"frontend_base_url"`
-}
-
-type AuthConfig struct {
-	Username      string `json:"-" yaml:"username"`
-	Password      string `json:"-" yaml:"password"`
-	SessionSecret string `json:"-" yaml:"session_secret"`
-	CookieName    string `json:"-" yaml:"cookie_name"`
+	Enabled       bool   `json:"enabled" yaml:"enabled"`
+	FeishuWebhook string `json:"feishu_webhook" yaml:"feishu_webhook"`
 }
 
 func Default() Config {
 	return Config{
-		Server: ServerConfig{
-			Listen: ":8080",
-		},
 		Database: DatabaseConfig{
 			Host:     "127.0.0.1",
 			Port:     5432,
@@ -88,12 +69,6 @@ func Default() Config {
 			Action: "mark",
 		},
 		Notification: NotificationConfig{},
-		Auth: AuthConfig{
-			Username:      "leftshoulder",
-			Password:      "yy233966",
-			SessionSecret: "leftshoulder-session-secret-change-me",
-			CookieName:    "hass_session",
-		},
 	}
 }
 
@@ -109,7 +84,6 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	overrideString(&cfg.Server.Listen, "LISTEN")
 	overrideString(&cfg.Database.Host, "DB_HOST")
 	overrideInt(&cfg.Database.Port, "DB_PORT")
 	overrideString(&cfg.Database.Name, "DB_NAME")
@@ -122,16 +96,9 @@ func Load(path string) (Config, error) {
 	overrideInt(&cfg.Scanner.DefaultBatchSize, "SCANNER_DEFAULT_BATCH_SIZE")
 	overrideInt(&cfg.Scanner.DefaultRateLimit, "SCANNER_DEFAULT_RATE_LIMIT")
 	overrideInt(&cfg.Scanner.DefaultTimeoutMinute, "SCANNER_DEFAULT_TIMEOUT_MINUTES")
-	overrideString(&cfg.Scanner.DefaultOrigin, "SCANNER_DEFAULT_ORIGIN")
-	overrideString(&cfg.Scanner.DefaultReferer, "SCANNER_DEFAULT_REFERER")
 	overrideString(&cfg.OwnIP.Action, "OWN_IP_ACTION")
 	overrideBool(&cfg.Notification.Enabled, "NOTIFY_ENABLED")
 	overrideString(&cfg.Notification.FeishuWebhook, "FEISHU_WEBHOOK")
-	overrideString(&cfg.Notification.FrontendBaseURL, "NOTIFY_FRONTEND_BASE_URL")
-	overrideString(&cfg.Auth.Username, "AUTH_USERNAME")
-	overrideString(&cfg.Auth.Password, "AUTH_PASSWORD")
-	overrideString(&cfg.Auth.SessionSecret, "AUTH_SESSION_SECRET")
-	overrideString(&cfg.Auth.CookieName, "AUTH_COOKIE_NAME")
 
 	cfg.OwnIP.Action = strings.ToLower(strings.TrimSpace(cfg.OwnIP.Action))
 	if cfg.OwnIP.Action == "" {
@@ -139,18 +106,6 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Scanner.DefaultBatchSize <= 0 {
 		cfg.Scanner.DefaultBatchSize = 1500
-	}
-	if strings.TrimSpace(cfg.Auth.Username) == "" {
-		cfg.Auth.Username = "leftshoulder"
-	}
-	if strings.TrimSpace(cfg.Auth.Password) == "" {
-		cfg.Auth.Password = "yy233966"
-	}
-	if strings.TrimSpace(cfg.Auth.SessionSecret) == "" {
-		cfg.Auth.SessionSecret = "leftshoulder-session-secret-change-me"
-	}
-	if strings.TrimSpace(cfg.Auth.CookieName) == "" {
-		cfg.Auth.CookieName = "hass_session"
 	}
 
 	return cfg, nil
